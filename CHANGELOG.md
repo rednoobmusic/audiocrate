@@ -12,14 +12,15 @@
     deletes included, and `tools/check_emu_lock.py` fails the build if a new one
     forgets.
   - Stopping a chiptune tore down the audio sink after a 0.5 s wait, whether or
-    not the decode thread had actually finished. Qt destroys the write handle
-    when the sink stops, so a late write landed on freed memory. The wait is now
-    long enough to be certain, and teardown is skipped entirely if the thread is
-    somehow still running.
+    not the decode thread had actually finished — the same expired wait that let
+    the emulator above be freed mid-render. The wait is now long enough to be
+    conclusive, and teardown is skipped entirely if the thread is somehow still
+    running.
   - Closing the Milkdrop visualizer could render one more frame through a
     destroyed projectM instance. Every projectM entry point now checks first.
-- Pausing and resuming a chiptune could leave two decode threads running against
-  one audio device; the old one is now retired before a new one starts.
+- Pausing and resuming a chiptune left a decode thread running for every
+  pause/resume — twelve of them after twelve rounds, all feeding one audio
+  device. The old one is now retired before a new one starts.
 - Resuming a chiptune whose audio device had been torn down did nothing at all.
 - **AudioCrate now appears as itself in your volume mixer**, with its own name,
   icon and version, instead of an anonymous "python3". This affects pavucontrol,
