@@ -1,0 +1,593 @@
+/* Blocky monochrome: white on black, hard edges, no radii anywhere.
+ * Everything reads off these variables, so switching back to a colour scheme is
+ * a matter of editing the block below rather than hunting through rules. */
+
+:root {
+  --ac-bg: #000000;
+  --ac-bg2: #0a0a0a;
+  --ac-bg3: #171717;
+  --ac-border: #333333;
+  --ac-border-strong: #ffffff;
+  --ac-accent: #ffffff;
+  --ac-accent-l: #ffffff;
+  --ac-accent-d: #2a2a2a;
+  --ac-fg: #ffffff;
+  --ac-fg-dim: #b4b4b4;
+  --ac-fg-dimmer: #6e6e6e;
+  --ac-sel: #1f1f1f;
+
+  --ion-background-color: var(--ac-bg);
+  --ion-background-color-rgb: 0, 0, 0;
+  --ion-text-color: var(--ac-fg);
+  --ion-text-color-rgb: 255, 255, 255;
+  --ion-font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+
+  --ion-color-primary: #ffffff;
+  --ion-color-primary-rgb: 255, 255, 255;
+  --ion-color-primary-contrast: #000000;
+  --ion-color-primary-contrast-rgb: 0, 0, 0;
+  --ion-color-primary-shade: #d4d4d4;
+  --ion-color-primary-tint: #ffffff;
+
+  --ion-item-background: transparent;
+  --ion-toolbar-background: var(--ac-bg);
+  --ion-tab-bar-background: var(--ac-bg);
+  --ion-card-background: var(--ac-bg2);
+  --ion-border-color: var(--ac-border);
+}
+
+/* Blocky means blocky: kill every rounded corner Ionic ships with. */
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+}
+
+body {
+  background: var(--ac-bg);
+  color: var(--ac-fg);
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ── chrome ────────────────────────────────────────────────────────────── */
+
+ion-toolbar {
+  --background: var(--ac-bg);
+  --color: var(--ac-fg);
+  --border-color: var(--ac-border-strong);
+  --border-width: 0 0 2px 0;
+  --border-style: solid;
+  --min-height: 46px;
+}
+
+ion-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+ion-tab-bar {
+  --background: var(--ac-bg);
+  --color: var(--ac-fg-dimmer);
+  --color-selected: var(--ac-fg);
+  border-top: 2px solid var(--ac-border-strong);
+}
+
+ion-tab-button {
+  --padding-top: 6px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+/* Selected tab gets a solid block, not a tint. */
+ion-tab-button.tab-selected {
+  background: var(--ac-fg);
+  --color-selected: var(--ac-bg);
+  color: var(--ac-bg);
+}
+
+ion-searchbar {
+  --background: var(--ac-bg);
+  --color: var(--ac-fg);
+  --placeholder-color: var(--ac-fg-dimmer);
+  --icon-color: var(--ac-fg);
+  --box-shadow: none;
+  --border-radius: 0;
+  padding: 8px 10px;
+}
+
+ion-searchbar .searchbar-input {
+  border: 2px solid var(--ac-border-strong) !important;
+  font-size: 13px !important;
+}
+
+ion-segment {
+  --background: var(--ac-bg);
+  border: 2px solid var(--ac-border-strong);
+  margin: 0 10px 8px;
+}
+
+ion-segment-button {
+  --background-checked: var(--ac-fg);
+  --color: var(--ac-fg-dim);
+  --color-checked: var(--ac-bg);
+  --indicator-color: transparent;
+  min-height: 34px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-right: 2px solid var(--ac-border-strong);
+}
+
+ion-segment-button:last-of-type { border-right: none; }
+
+ion-list { background: transparent; }
+
+ion-range {
+  --bar-background: var(--ac-bg3);
+  --bar-background-active: var(--ac-fg);
+  --bar-height: 6px;
+  --knob-background: var(--ac-fg);
+  --knob-size: 20px;
+  --height: 34px;
+}
+
+/* Square knob — the default is a circle, which fights the blocky look. */
+ion-range::part(knob) {
+  border: 2px solid var(--ac-bg);
+}
+
+ion-item {
+  --background: transparent;
+  --background-activated: var(--ac-sel);
+  --background-focused: var(--ac-sel);
+  --color: var(--ac-fg);
+  --border-color: var(--ac-border);
+  --inner-padding-end: 8px;
+  --min-height: 60px;
+}
+
+ion-note { color: var(--ac-fg-dimmer); }
+
+/* Clamp list text. Some tracks credit a dozen artists, and letting that wrap
+   freely turns one row into half a screen. */
+ion-label h3 {
+  color: var(--ac-fg);
+  font-size: 13px;
+  font-weight: 700;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+ion-label p {
+  color: var(--ac-fg-dimmer);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+ion-modal, ion-action-sheet {
+  --background: var(--ac-bg);
+  --color: var(--ac-fg);
+  --border-color: var(--ac-border-strong);
+}
+
+ion-action-sheet .action-sheet-group {
+  background: var(--ac-bg) !important;
+  border: 2px solid var(--ac-border-strong);
+}
+
+ion-action-sheet .action-sheet-button {
+  color: var(--ac-fg) !important;
+  font-family: var(--ion-font-family);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+/* ── shared bits ───────────────────────────────────────────────────────── */
+
+.ac-art {
+  background: var(--ac-bg3);
+  object-fit: cover;
+  display: block;
+  border: 2px solid var(--ac-border-strong);
+  /* Cover art keeps its own colour — the chrome is monochrome, the artwork
+     isn't. */
+}
+
+.ac-art-fallback {
+  display: grid;
+  place-items: center;
+  background: var(--ac-bg2);
+  color: var(--ac-fg-dimmer);
+}
+
+.ac-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border: 2px solid var(--ac-fg);
+  color: var(--ac-fg);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.ac-missing {
+  opacity: 0.45;
+  font-style: italic;
+}
+
+.ac-playing-dot {
+  width: 9px;
+  height: 9px;
+  background: var(--ac-fg);
+  flex: 0 0 auto;
+}
+
+.ac-empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--ac-fg-dimmer);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  line-height: 1.8;
+  text-transform: uppercase;
+}
+
+/* ── login ─────────────────────────────────────────────────────────────── */
+
+.ac-login {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px calc(32px + env(safe-area-inset-bottom));
+  gap: 20px;
+}
+
+.ac-login h1 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  margin: 0;
+  padding: 8px 14px;
+  border: 2px solid var(--ac-fg);
+  color: var(--ac-fg);
+}
+
+.ac-login .sub {
+  color: var(--ac-fg-dimmer);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin: -12px 0 4px;
+}
+
+.ac-pips { display: flex; gap: 12px; height: 16px; }
+
+.ac-pip {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ac-fg-dimmer);
+  transition: background 100ms, border-color 100ms;
+}
+
+.ac-pip.on { background: var(--ac-fg); border-color: var(--ac-fg); }
+.ac-pip.err { border-color: #ff4444; background: transparent; }
+
+.ac-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 72px);
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.ac-key {
+  width: 72px;
+  height: 72px;
+  border: 2px solid var(--ac-fg);
+  background: var(--ac-bg);
+  color: var(--ac-fg);
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  transition: background 60ms, color 60ms;
+}
+
+.ac-key:active { background: var(--ac-fg); color: var(--ac-bg); }
+.ac-key.blank { border-color: transparent; background: transparent; }
+
+.ac-login-err {
+  color: #ff4444;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  min-height: 16px;
+}
+
+@keyframes ac-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+
+.ac-shake { animation: ac-shake 320ms ease; }
+
+/* ── now playing ───────────────────────────────────────────────────────── */
+
+.ac-now {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 10px 18px 12px;
+  gap: 12px;
+}
+
+.ac-now-art {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.ac-now-art > * {
+  width: min(100%, 58vh);
+  aspect-ratio: 1;
+  border: 2px solid var(--ac-fg);
+}
+
+.ac-now-meta { text-align: center; min-height: 58px; }
+
+.ac-now-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ac-fg);
+  margin: 0 0 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ac-now-sub {
+  font-size: 12px;
+  color: var(--ac-fg-dim);
+  letter-spacing: 0.06em;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ac-now-album {
+  font-size: 10px;
+  color: var(--ac-fg-dimmer);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ac-seek { padding: 0; }
+
+/* ── waveform seek bar ─────────────────────────────────────────────────── */
+
+.ac-wave {
+  position: relative;
+  width: 100%;
+  height: 56px;
+  border: 2px solid var(--ac-fg);
+  background: var(--ac-bg);
+  touch-action: none;          /* pointer drag must not scroll the page */
+  cursor: pointer;
+}
+
+.ac-wave-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ac-wave-loading {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--ac-bg3) 0 3px,
+    transparent 3px 4px
+  );
+  opacity: 0.5;
+}
+
+.ac-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ac-fg-dim);
+  margin-top: -4px;
+}
+
+.ac-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+}
+
+.ac-transport button {
+  background: var(--ac-bg);
+  border: 2px solid var(--ac-fg);
+  color: var(--ac-fg);
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  transition: background 60ms, color 60ms;
+}
+
+.ac-transport button:active { background: var(--ac-fg); color: var(--ac-bg); }
+.ac-transport button:disabled { border-color: var(--ac-fg-dimmer); color: var(--ac-fg-dimmer); }
+
+.ac-play-btn {
+  width: 72px !important;
+  height: 72px !important;
+  background: var(--ac-fg) !important;
+  color: var(--ac-bg) !important;
+}
+
+.ac-play-btn:active { background: var(--ac-bg) !important; color: var(--ac-fg) !important; }
+
+.ac-toggles {
+  display: flex;
+  gap: 6px;
+}
+
+.ac-toggle {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--ac-bg);
+  border: 2px solid var(--ac-fg-dimmer);
+  color: var(--ac-fg-dimmer);
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 2px;
+}
+
+/* Active toggles invert — unmistakable at a glance, no colour needed. */
+.ac-toggle:disabled {
+  opacity: 0.3;
+  border-style: dashed;
+}
+
+.ac-toggle.on {
+  background: var(--ac-fg);
+  border-color: var(--ac-fg);
+  color: var(--ac-bg);
+}
+
+.ac-subsong-btn {
+  width: 100%;
+  background: var(--ac-bg);
+  border: 2px solid var(--ac-fg);
+  color: var(--ac-fg);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 9px;
+}
+
+.ac-volume { display: flex; align-items: center; gap: 10px; color: var(--ac-fg-dim); }
+
+/* ── mini player ───────────────────────────────────────────────────────── */
+
+/* Floats above the tab bar. Ionic's iOS tab bar is 50px; the safe-area inset
+   keeps it clear of the home indicator. */
+.ac-mini-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(50px + env(safe-area-inset-bottom));
+  z-index: 20;
+}
+
+/* Content must clear the docked mini player as well as the tab bar. */
+ion-content { --padding-bottom: 62px; }
+
+.ac-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--ac-bg);
+  border-top: 2px solid var(--ac-fg);
+}
+
+.ac-mini .ac-art, .ac-mini .ac-art-fallback {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+}
+
+.ac-mini-text { flex: 1 1 auto; min-width: 0; }
+
+.ac-mini-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ac-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ac-mini-sub {
+  font-size: 10px;
+  color: var(--ac-fg-dimmer);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ac-mini button {
+  background: transparent;
+  border: none;
+  color: var(--ac-fg);
+  padding: 6px;
+  flex: 0 0 auto;
+}
+
+.ac-mini-progress { height: 3px; background: var(--ac-bg3); }
+.ac-mini-progress > div { height: 100%; background: var(--ac-fg); transition: width 240ms linear; }
+
+/* ── lists ─────────────────────────────────────────────────────────────── */
+
+.ac-row-art, .ac-row-art.ac-art-fallback {
+  width: 44px;
+  height: 44px;
+  margin-right: 12px;
+  flex: 0 0 auto;
+}
+
+.ac-group-art, .ac-group-art.ac-art-fallback {
+  width: 52px;
+  height: 52px;
+  margin-right: 12px;
+  flex: 0 0 auto;
+}
+
+.ac-section-head {
+  padding: 12px 14px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ac-bg);
+  background: var(--ac-fg);
+}

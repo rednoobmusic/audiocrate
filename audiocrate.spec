@@ -1,0 +1,93 @@
+# -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+import os
+
+block_cipher = None
+
+a = Analysis(
+    ['main.py'],
+    # Source is grouped into folders; _bootstrap puts them on sys.path at runtime,
+    # and pathex lets PyInstaller's analysis resolve the flat module names.
+    pathex=['.', 'core', 'panels', 'integrations', 'ui'],
+    binaries=[
+        ('/usr/lib/libgme.so.0', '.'),
+        ('libfurnace_wrap.so', '.'),
+    ] + collect_dynamic_libs('PySide6'),
+    datas=[
+        ('JetBrainsMono', 'JetBrainsMono'),
+        ('icon.png', '.'),
+    ] + collect_data_files('PySide6'),
+    hiddenimports=[
+        '_bootstrap',
+        'vgm_player',
+        'fur_player',
+        'dsp_engine',
+        'dsp_chain',
+        'panel_eq',
+        'discord_rpc',
+        'pypresence',
+        'scipy',
+        'scipy.signal',
+        'ffmpeg_util',
+        'library_cache',
+        'lyrics_fetch',
+        'sleep_timer',
+        'applog',
+        'PySide6.QtMultimedia',
+        'PySide6.QtMultimediaWidgets',
+        'PySide6.QtDBus',
+        'PySide6.QtNetwork',
+        'PySide6.QtOpenGL',
+        'PySide6.QtSvg',
+        'shiboken6',
+        'mutagen',
+        'mutagen.mp3',
+        'mutagen.flac',
+        'mutagen.mp4',
+        'mutagen.id3',
+        'mutagen.ogg',
+        'mutagen.oggvorbis',
+        'mutagen.wave',
+        'numpy',
+        'PIL',
+        'PIL.Image',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=['tkinter', 'matplotlib', 'pandas'],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='audiocrate',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='audiocrate',
+)

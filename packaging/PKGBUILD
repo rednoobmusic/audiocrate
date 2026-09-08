@@ -1,0 +1,53 @@
+# Maintainer: rednoobmusic
+# Build + install the proper Arch way (from the project root):
+#   makepkg -si -p packaging/PKGBUILD
+# Then it's a normal package: launch from the menu, remove with `pacman -R audiocrate`.
+pkgname=audiocrate
+pkgver=1.0.0       # keep in sync with core/_version.py
+pkgrel=1
+pkgdesc="Audio player with live DSP, parametric EQ, visualizers and chiptune support"
+arch=('any')
+url="https://rednoobmusic.com"
+license=('custom')
+depends=('python' 'pyside6' 'python-numpy' 'python-scipy' 'python-mutagen'
+         'python-pillow' 'ffmpeg')
+optdepends=('libgme: VGM/VGZ chiptune playback'
+            'python-pypresence: Discord Rich Presence')
+options=('!strip')
+
+package() {
+    # Build straight from the working tree (no source tarball).
+    local root="$startdir/.."
+    local dst="$pkgdir/usr/lib/audiocrate"
+    install -dm755 "$dst"
+    # panels/ staged as *.py only — it also holds local working trees
+    # (panels/myfurnace) that must never be packaged.
+    cp -r "$root"/main.py "$root"/_bootstrap.py \
+          "$root"/core "$root"/integrations "$root"/ui \
+          "$root"/JetBrainsMono "$root"/icon.png \
+          "$dst/"
+    install -dm755 "$dst/panels"
+    cp "$root"/panels/*.py "$dst/panels/"
+    for _so in libfurnace_wrap.so libsid_wrap.so; do
+        [ -f "$root/$_so" ] && install -Dm755 "$root/$_so" "$dst/$_so"
+    done
+
+    # Ship optimised bytecode only — strips comments + docstrings, removes .py
+    # source so the package exposes no readable source.
+    python -OO -m compileall -b -q "$dst" >/dev/null 2>&1 || \
+        python -m compileall -b -q "$dst" >/dev/null 2>&1 || true
+    find "$dst" -name '*.py' -delete
+    find "$dst" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
+    install -dm755 "$pkgdir/usr/bin"
+    cat > "$pkgdir/usr/bin/audiocrate" <<'EOF'
+#!/usr/bin/env bash
+exec python /usr/lib/audiocrate/main.pyc "$@"
+EOF
+    chmod 755 "$pkgdir/usr/bin/audiocrate"
+
+    install -Dm644 "$root/packaging/audiocrate.desktop" \
+        "$pkgdir/usr/share/applications/audiocrate.desktop"
+    install -Dm644 "$root/icon.png" \
+        "$pkgdir/usr/share/icons/hicolor/256x256/apps/audiocrate.png"
+}
