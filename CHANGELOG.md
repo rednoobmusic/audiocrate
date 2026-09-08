@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Fixed
+- **Crashes when switching chiptunes quickly, and when closing the visualizer.**
+  Three separate use-after-free paths, all the same shape — native memory freed
+  on one thread while another was still using it:
+  - libgme's emulator was deleted without holding the lock that exists precisely
+    to serialise access to it, so a track change could free the emulator while
+    the decode thread was still rendering from it. Every call now takes the lock,
+    deletes included, and `tools/check_emu_lock.py` fails the build if a new one
+    forgets.
+  - Stopping a chiptune tore down the audio sink after a 0.5 s wait, whether or
+    not the decode thread had actually finished. Qt destroys the write handle
+    when the sink stops, so a late write landed on freed memory. The wait is now
+    long enough to be certain, and teardown is skipped entirely if the thread is
+    somehow still running.
+  - Closing the Milkdrop visualizer could render one more frame through a
+    destroyed projectM instance. Every projectM entry point now checks first.
+- Pausing and resuming a chiptune could leave two decode threads running against
+  one audio device; the old one is now retired before a new one starts.
+- Resuming a chiptune whose audio device had been torn down did nothing at all.
 - **AudioCrate now appears as itself in your volume mixer**, with its own name,
   icon and version, instead of an anonymous "python3". This affects pavucontrol,
   helvum, and the GNOME and KDE volume panels, on both PipeWire and PulseAudio.

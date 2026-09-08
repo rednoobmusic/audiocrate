@@ -312,10 +312,13 @@ class FurPlayer(QObject):
         with self._engine_lock:
             self._rate = _lib.fw_sample_rate(self._handle) or _RATE
         self._duration_us = max(1, info.duration_us)
-        names = [
-            _lib.fw_channel_name(self._handle, i).decode(errors="replace")
-            for i in range(info.channel_count)
-        ]
+        # Under the lock like every other engine call: these are pointers into
+        # engine-owned memory, and a concurrent load frees them mid-iteration.
+        with self._engine_lock:
+            names = [
+                (_lib.fw_channel_name(self._handle, i) or b"").decode(errors="replace")
+                for i in range(info.channel_count)
+            ]
         self._meta = {
             "title":         info.title.decode(errors="replace") or path.stem,
             "artist":        info.author.decode(errors="replace"),
@@ -745,6 +748,13 @@ class FurPlayer(QObject):
                 self._render_thread.join(timeout=2.0)
             except Exception:
                 pass
+            if self._render_thread.is_alive():
+                # Never tear down under a live render thread. Clearing __handle
+                # would make the _handle property fw_create() a *second*
+                # DivEngine on that thread's next call — the shared-sysDefs
+                # double-free described in __init__. Leaking one engine while
+                # the object goes away is the cheaper outcome.
+                return
             self._render_thread = None
         handle = self.__handle
         self.__handle = None

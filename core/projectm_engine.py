@@ -145,11 +145,18 @@ class ProjectMEngine:
     def preset_count(self) -> int:
         return self._count
 
+    # destroy() nulls _pm, and a paint can still land after it — Qt repaints on
+    # expose and resize, not only on the visualizer's frame timer, so the window
+    # between destroy() and the widget dropping its engine reference is live.
+    # Passing that NULL to projectM segfaults, so every entry point checks.
+
     def resize(self, w: int, h: int):
+        if not self._pm:
+            return
         _core.projectm_set_window_size(self._pm, max(1, w), max(1, h))
 
     def add_pcm_mono(self, samples: np.ndarray):
-        if samples is None or len(samples) == 0:
+        if not self._pm or samples is None or len(samples) == 0:
             return
         a = np.ascontiguousarray(samples, dtype=np.float32)
         n = min(len(a), self._max_samples)
@@ -158,6 +165,8 @@ class ProjectMEngine:
             ctypes.c_uint(n), PROJECTM_MONO)
 
     def render(self):
+        if not self._pm:
+            return
         _core.projectm_opengl_render_frame(self._pm)
 
     def next_preset(self, hard: bool = True):
@@ -169,6 +178,8 @@ class ProjectMEngine:
             _pl.projectm_playlist_play_previous(self._pl, hard)
 
     def set_preset_duration(self, seconds: float):
+        if not self._pm:
+            return
         _core.projectm_set_preset_duration(self._pm, float(seconds))
 
     def set_shuffle(self, on: bool):
@@ -176,10 +187,12 @@ class ProjectMEngine:
             _pl.projectm_playlist_set_shuffle(self._pl, bool(on))
 
     def set_locked(self, on: bool):
+        if not self._pm:
+            return
         _core.projectm_set_preset_locked(self._pm, bool(on))
 
     def is_locked(self) -> bool:
-        return bool(_core.projectm_get_preset_locked(self._pm))
+        return bool(_core.projectm_get_preset_locked(self._pm)) if self._pm else False
 
     def current_preset_path(self) -> str:
         """Full path of the active preset's .milk file, or ''."""

@@ -133,7 +133,10 @@ class VgmPlayer(QObject):
         self._volume: float   = 1.0
         self._sink:   QAudioSink | None = None
         self._device: QAudioDevice | None = None
-        self._emu_lock = threading.Lock()   # libgme isn't thread-safe: serialize emu access
+        # libgme isn't thread-safe: serialize every emu access, deletes included.
+        # Reentrant because load() holds it across _get_track_length(), which
+        # takes it too.
+        self._emu_lock = threading.RLock()
         self._dc_zi = None                  # per-channel DC-blocker filter state
         self._path:  Path | None = None     # currently loaded file (for subsong reloads)
         self._track: int = 0                # current subsong index
@@ -159,9 +162,8 @@ class VgmPlayer(QObject):
 
     @property
     def position_ms(self) -> int:
-        if self._emu:
-            return _lib.gme_tell(self._emu)
-        return 0
+        with self._emu_lock:
+            return _lib.gme_tell(self._emu) if self._emu else 0
 
     @property
     def duration_ms(self) -> int:
@@ -178,24 +180,26 @@ class VgmPlayer(QObject):
         err = _lib.gme_open_file(str(path).encode(), ctypes.byref(emu), _SAMPLE_RATE)
         if err:
             return False
-        if self._emu:
-            _lib.gme_delete(self._emu)
-        self._emu = emu
-        self._path = path
-        self._track = track_idx
-        self._dur_ms = self._get_track_length(track_idx)
-        _lib.gme_set_fade(self._emu, max(0, self._dur_ms - _FADE_MS))
-        err = _lib.gme_start_track(self._emu, track_idx)
-        if err:
-            _lib.gme_delete(self._emu)
-            self._emu = None
-            return False
+        with self._emu_lock:
+            if self._emu:
+                _lib.gme_delete(self._emu)
+            self._emu = emu
+            self._path = path
+            self._track = track_idx
+            self._dur_ms = self._get_track_length(track_idx)
+            _lib.gme_set_fade(self._emu, max(0, self._dur_ms - _FADE_MS))
+            err = _lib.gme_start_track(self._emu, track_idx)
+            if err:
+                _lib.gme_delete(self._emu)
+                self._emu = None
+                return False
         return True
 
     @property
     def track_count(self) -> int:
         """Number of subsongs in the loaded file (1 for single-tune formats)."""
-        return int(_lib.gme_track_count(self._emu)) if self._emu else 0
+        with self._emu_lock:
+            return int(_lib.gme_track_count(self._emu)) if self._emu else 0
 
     @property
     def current_track(self) -> int:
@@ -229,14 +233,21 @@ class VgmPlayer(QObject):
     def resume(self):
         if self._playing or not self._emu:
             return
+        if not self._sink:
+            # play() sets _playing, clears the flag and starts everything itself.
+            # It early-returns on _playing, so this has to happen before we set it.
+            self.play()
+            return
+        # pause() only sets _stop_flag, it never joins. Retire the old decode
+        # thread before clearing the flag, or it survives the clear and two
+        # threads end up writing to one QIODevice.
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5.0)
         self._playing = True
         self._stop_flag.clear()
-        if self._sink:
-            self._sink.resume()
-            self._thread = threading.Thread(target=self._decode_loop, daemon=True)
-            self._thread.start()
-        else:
-            self.play()
+        self._sink.resume()
+        self._thread = threading.Thread(target=self._decode_loop, daemon=True)
+        self._thread.start()
         self._pos_timer.start()
         self.state_changed.emit(True)
 
@@ -245,7 +256,18 @@ class VgmPlayer(QObject):
         self._stop_flag.set()
         self._pos_timer.stop()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=0.5)
+            # The decode loop checks _stop_flag every iteration and sleeps in 5 ms
+            # steps, so it exits well inside this. The old 0.5 s could expire while
+            # the loop still held the sink, and the teardown below then ran under it.
+            self._thread.join(timeout=5.0)
+        # QAudioSink.stop() destroys the QIODevice start() handed out. Doing that
+        # while the decode thread is still in _io.write() is a write to freed
+        # memory. If the thread somehow outlived the join, leave the sink alone —
+        # audio keeps playing until it exits, which beats a segfault.
+        if self._thread and self._thread.is_alive():
+            from applog import log
+            log.warning("vgm decode thread outlived stop(); leaving sink up")
+            return
         self._thread = None
         if self._sink:
             self._sink.stop()
@@ -268,15 +290,19 @@ class VgmPlayer(QObject):
 
     def cleanup(self):
         self.stop()
-        if self._emu:
-            _lib.gme_delete(self._emu)
-            self._emu = None
+        with self._emu_lock:
+            if self._emu:
+                _lib.gme_delete(self._emu)
+                self._emu = None
 
     # ── internals ───────────────────────────────────────────────────────────────
 
     def _get_track_length(self, idx: int) -> int:
         info_ptr = ctypes.POINTER(_GmeInfo)()
-        err = _lib.gme_track_info(self._emu, ctypes.byref(info_ptr), idx)
+        with self._emu_lock:
+            if not self._emu:
+                return _DEFAULT_LEN_MS
+            err = _lib.gme_track_info(self._emu, ctypes.byref(info_ptr), idx)
         if not err and info_ptr:
             length = info_ptr.contents.play_length
             _lib.gme_free_info(info_ptr)
@@ -306,14 +332,17 @@ class VgmPlayer(QObject):
                                      _SAMPLE_RATE, data)
             offset = 0
             while offset < len(data) and not self._stop_flag.is_set():
-                if not self._io:
+                # Read both once per pass: stop() can null them between the guard
+                # and the write, and `self._io.write` would then raise on None.
+                sink, io = self._sink, self._io
+                if sink is None or io is None:
                     break
-                free = self._sink.bytesFree() if self._sink else 0
+                free = sink.bytesFree()
                 if free <= 0:
                     time.sleep(0.005)
                     continue
                 chunk   = data[offset: offset + min(free, len(data) - offset)]
-                written = self._io.write(chunk)
+                written = io.write(chunk)
                 if written > 0:
                     offset += written
                 else:
