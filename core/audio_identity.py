@@ -121,3 +121,51 @@ def apply_to_qt(app) -> None:
     app.setApplicationDisplayName(APP_NAME)
     app.setDesktopFileName(APP_ID)
     app.setApplicationVersion(VERSION)
+
+
+if __name__ == "__main__":      # self-check: python3 core/audio_identity.py
+    import re
+
+    def _run(env):
+        global _applied
+        for _k in ("PULSE_PROP_OVERRIDE", "PIPEWIRE_PROPS", "RESOURCE_NAME"):
+            os.environ.pop(_k, None)
+        os.environ.update(env)
+        _applied = False
+        apply()
+
+    # Clean environment: the keys mixers read, and no trace of the interpreter.
+    _run({})
+    _props = dict(re.findall(r"([\w.]+)='([^']*)'", os.environ["PULSE_PROP_OVERRIDE"]))
+    assert _props["application.name"] == APP_NAME, _props
+    assert _props["application.id"] == APP_ID, _props
+    assert _props["application.icon_name"] == APP_ID, _props
+    assert _props["media.role"] == "music", _props
+    assert "python" not in os.environ["PULSE_PROP_OVERRIDE"].lower()
+    assert os.environ["RESOURCE_NAME"] == APP_ID
+
+    # Calling apply() twice must not duplicate the entries.
+    _before = os.environ["PULSE_PROP_OVERRIDE"]
+    apply()
+    assert os.environ["PULSE_PROP_OVERRIDE"] == _before
+
+    # Anything the user set survives and still wins — both parsers take the last
+    # assignment, so ours going first is what makes theirs override it.
+    _run({"PULSE_PROP_OVERRIDE": "media.role='video'",
+          "PIPEWIRE_PROPS": "{ node.latency=256/48000 }"})
+    _pulse = os.environ["PULSE_PROP_OVERRIDE"]
+    assert _pulse.rindex("'video'") > _pulse.rindex("'music'"), _pulse
+    _pw = os.environ["PIPEWIRE_PROPS"]
+    assert "node.latency=256/48000" in _pw, _pw
+    assert _pw.count("{") == 1 and _pw.count("}") == 1, _pw   # two objects would not parse
+
+    # PIPEWIRE_PROPS also takes a bare key=value list; fold that in as well.
+    _run({"PIPEWIRE_PROPS": "node.latency=256/48000"})
+    assert os.environ["PIPEWIRE_PROPS"].startswith("{ application.name=")
+    assert "node.latency=256/48000" in os.environ["PIPEWIRE_PROPS"]
+
+    # RESOURCE_NAME is a plain default — a user value is left alone.
+    _run({"RESOURCE_NAME": "custom"})
+    assert os.environ["RESOURCE_NAME"] == "custom"
+
+    print("audio_identity self-check OK")
