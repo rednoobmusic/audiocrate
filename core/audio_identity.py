@@ -19,9 +19,17 @@ Two channels have to be told, because Qt can reach the server either way:
     PIPEWIRE_PROPS       merged into the property dict of every stream by
                          pw_stream_new(), covering a native libpipewire path.
 
-`media.role` is spelled differently on the two — lowercase `music` is a
-PulseAudio role, capitalised `Music` a PipeWire one — which is why the two
-strings are built separately rather than shared.
+The two strings are built separately rather than shared because the conventions
+differ: PulseAudio quotes values and spells keys with underscores, PipeWire
+takes them bare and hyphenated.
+
+Deliberately absent from both: `media.role`. Setting it looks right for a music
+player, but PulseAudio's stream-restore keys saved volume on the role before it
+looks at the application, so every app tagged `music` — Chromium among them —
+would share one remembered volume with us. Leaving it off keys volume on
+`application.id` instead, which is the whole point of naming ourselves. A
+routing rule that wants this app can match `application.id = audiocrate`, which
+is more specific than a role anyway.
 
 Both variables are read when the client library initialises, on the first
 QAudioSink/QAudioOutput — so apply() has to run before PySide6.QtMultimedia is
@@ -46,7 +54,7 @@ from _version import VERSION
 APP_NAME = "AudioCrate"
 APP_ID   = "audiocrate"   # matches audiocrate.desktop and the installed icon name
 
-# Quoted values, underscore spelling, lowercase role — PulseAudio's conventions.
+# Quoted values, underscore spelling — PulseAudio's conventions.
 _PULSE_PROPS = " ".join((
     f"application.name='{APP_NAME}'",
     f"application.id='{APP_ID}'",
@@ -55,10 +63,9 @@ _PULSE_PROPS = " ".join((
     # Factually this process is the interpreter, but the installed entry point
     # is `audiocrate` and this is the field mixers fall back to for a label.
     f"application.process.binary='{APP_ID}'",
-    "media.role='music'",
 ))
 
-# Bare values, hyphen spelling, capitalised role — PipeWire's conventions.
+# Bare values, hyphen spelling — PipeWire's conventions.
 # No icon key here: PipeWire documents `media.icon-name` for media objects but
 # nothing equivalent for applications, and pipewire-pulse already carries the
 # PulseAudio one above, which is the path Qt actually takes.
@@ -66,7 +73,6 @@ _PIPEWIRE_PROPS = " ".join((
     f"application.name={APP_NAME}",
     f"application.id={APP_ID}",
     f"application.version={VERSION}",
-    "media.role=Music",
 ))
 
 _applied = False
@@ -140,7 +146,10 @@ if __name__ == "__main__":      # self-check: python3 core/audio_identity.py
     assert _props["application.name"] == APP_NAME, _props
     assert _props["application.id"] == APP_ID, _props
     assert _props["application.icon_name"] == APP_ID, _props
-    assert _props["media.role"] == "music", _props
+    # media.role must stay off: stream-restore keys saved volume on the role
+    # ahead of the application, so setting it shares our volume with every other
+    # app tagged the same way. See the module docstring.
+    assert "media.role" not in _props, _props
     assert "python" not in os.environ["PULSE_PROP_OVERRIDE"].lower()
     assert os.environ["RESOURCE_NAME"] == APP_ID
 
@@ -151,10 +160,10 @@ if __name__ == "__main__":      # self-check: python3 core/audio_identity.py
 
     # Anything the user set survives and still wins — both parsers take the last
     # assignment, so ours going first is what makes theirs override it.
-    _run({"PULSE_PROP_OVERRIDE": "media.role='video'",
+    _run({"PULSE_PROP_OVERRIDE": "application.name='Mine'",
           "PIPEWIRE_PROPS": "{ node.latency=256/48000 }"})
     _pulse = os.environ["PULSE_PROP_OVERRIDE"]
-    assert _pulse.rindex("'video'") > _pulse.rindex("'music'"), _pulse
+    assert _pulse.rindex("'Mine'") > _pulse.rindex(f"'{APP_NAME}'"), _pulse
     _pw = os.environ["PIPEWIRE_PROPS"]
     assert "node.latency=256/48000" in _pw, _pw
     assert _pw.count("{") == 1 and _pw.count("}") == 1, _pw   # two objects would not parse
