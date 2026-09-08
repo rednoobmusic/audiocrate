@@ -41,7 +41,7 @@ a = Analysis(
         ('icon.png', '.'),
     ],
     hiddenimports=[
-        '_bootstrap',
+        '_bootstrap', 'audio_identity',
         'vgm_player', 'fur_player', 'dsp_engine', 'dsp_chain', 'panel_eq',
         'discord_rpc', 'pypresence', 'scipy', 'scipy.signal', 'ffmpeg_util',
         'library_cache', 'lyrics_fetch', 'sleep_timer', 'applog',

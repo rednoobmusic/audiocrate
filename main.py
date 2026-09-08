@@ -2,9 +2,18 @@ import sys
 import os
 import signal
 import _bootstrap  # noqa: F401  — puts core/panels/integrations/ui on sys.path
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QTimer
-from main_window import MainWindow
+
+# Must happen before any Qt audio class exists: libpulse and libpipewire read
+# this process's identity out of the environment when they initialise, and fall
+# back to the interpreter's name ("python3") when it isn't there. Importing
+# QtMultimedia is what eventually loads them. See core/audio_identity.py.
+import audio_identity
+
+audio_identity.apply()
+
+from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import Qt, QTimer  # noqa: E402
+from main_window import MainWindow  # noqa: E402
 
 
 def _suppress_alsa_noise():
@@ -36,7 +45,9 @@ if __name__ == "__main__":
 
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
-    app.setApplicationName("AudioCrate")
+    # Name, display name, version, and the audiocrate.desktop association that
+    # Wayland and the XDG portals use to find our icon.
+    audio_identity.apply_to_qt(app)
 
     # Load bundled Nerd Font so icons render correctly on all platforms.
     from PySide6.QtGui import QFontDatabase, QIcon

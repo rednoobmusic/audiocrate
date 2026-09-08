@@ -19,6 +19,7 @@ a = Analysis(
     ] + collect_data_files('PySide6'),
     hiddenimports=[
         '_bootstrap',
+        'audio_identity',
         'vgm_player',
         'fur_player',
         'dsp_engine',
