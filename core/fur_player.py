@@ -751,7 +751,7 @@ class FurPlayer(QObject):
             if self._render_thread.is_alive():
                 # Never tear down under a live render thread. Clearing __handle
                 # would make the _handle property fw_create() a *second*
-                # DivEngine on that thread's next call — the shared-sysDefs
+                # DivEngine on that thread's next call, the shared-sysDefs
                 # double-free described in __init__. Leaking one engine while
                 # the object goes away is the cheaper outcome.
                 return

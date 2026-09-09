@@ -260,10 +260,13 @@ class VgmPlayer(QObject):
             # steps, so it exits well inside this. The old 0.5 s could expire while
             # the loop still held the sink, and the teardown below then ran under it.
             self._thread.join(timeout=5.0)
-        # QAudioSink.stop() destroys the QIODevice start() handed out. Doing that
-        # while the decode thread is still in _io.write() is a write to freed
-        # memory. If the thread somehow outlived the join, leave the sink alone —
-        # audio keeps playing until it exits, which beats a segfault.
+        # Tearing the sink down while the decode thread is still running is the
+        # wrong order regardless: it is the same expired join that let load()
+        # free the emulator mid-render. The write itself turns out to be safe:
+        # a stopped sink reports bytesFree() == 0, so the loop takes its continue
+        # and breaks on the _io guard before reaching _io.write(). Don't rely on
+        # that; if the thread outlived the join, leave the sink alone and let it
+        # finish. Audio kept playing beats memory freed under a live thread.
         if self._thread and self._thread.is_alive():
             from applog import log
             log.warning("vgm decode thread outlived stop(); leaving sink up")

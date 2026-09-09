@@ -145,7 +145,7 @@ class ProjectMEngine:
     def preset_count(self) -> int:
         return self._count
 
-    # destroy() nulls _pm, and a paint can still land after it — Qt repaints on
+    # destroy() nulls _pm, and a paint can still land after it. Qt repaints on
     # expose and resize, not only on the visualizer's frame timer, so the window
     # between destroy() and the widget dropping its engine reference is live.
     # Passing that NULL to projectM segfaults, so every entry point checks.

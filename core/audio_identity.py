@@ -1,10 +1,10 @@
 """Present AudioCrate to PulseAudio / PipeWire as its own application.
 
 Every stream the app opens is labelled "python3" in pavucontrol, helvum and the
-GNOME/KDE volume panels — generic icon, no way to tell it apart from any other
-Python program. That is not Qt's doing. libpulse fills `application.name` from
-the process binary (`/proc/self/exe` → the interpreter) whenever the
-application has not set it itself, and Qt Multimedia never sets it. Per-app
+GNOME/KDE volume panels. Generic icon, and no way to tell it apart from any
+other Python program. That is not Qt's doing. libpulse fills `application.name`
+from the process binary (`/proc/self/exe`, which is the interpreter) whenever
+the application has not set it itself, and Qt Multimedia never sets it. Per-app
 volume is remembered against that name too, so the level you leave AudioCrate
 at is inherited by the next Python program that plays anything.
 
@@ -25,20 +25,20 @@ takes them bare and hyphenated.
 
 Deliberately absent from both: `media.role`. Setting it looks right for a music
 player, but PulseAudio's stream-restore keys saved volume on the role before it
-looks at the application, so every app tagged `music` — Chromium among them —
-would share one remembered volume with us. Leaving it off keys volume on
+looks at the application, so every app tagged `music`, Chromium included, would
+share one remembered volume with us. Leaving it off keys volume on
 `application.id` instead, which is the whole point of naming ourselves. A
 routing rule that wants this app can match `application.id = audiocrate`, which
 is more specific than a role anyway.
 
 Both variables are read when the client library initialises, on the first
-QAudioSink/QAudioOutput — so apply() has to run before PySide6.QtMultimedia is
+QAudioSink/QAudioOutput, so apply() has to run before PySide6.QtMultimedia is
 imported. main.py calls it first thing.
 
 RESOURCE_NAME closes the same gap on X11: Qt fills the instance half of
 WM_CLASS from argv[0] ("python3") unless that variable is set. The class half
 already comes from applicationName, which is why StartupWMClass=AudioCrate in
-audiocrate.desktop matches today — that half is left alone.
+audiocrate.desktop matches today. That half is left alone.
 
 The app has five separate output paths (QMediaPlayer for video, and a QAudioSink
 each for the DSP engine, Furnace, VGM and SID), so each one used to appear as
@@ -54,7 +54,7 @@ from _version import VERSION
 APP_NAME = "AudioCrate"
 APP_ID   = "audiocrate"   # matches audiocrate.desktop and the installed icon name
 
-# Quoted values, underscore spelling — PulseAudio's conventions.
+# Quoted values, underscore spelling. PulseAudio's conventions.
 _PULSE_PROPS = " ".join((
     f"application.name='{APP_NAME}'",
     f"application.id='{APP_ID}'",
@@ -65,7 +65,7 @@ _PULSE_PROPS = " ".join((
     f"application.process.binary='{APP_ID}'",
 ))
 
-# Bare values, hyphen spelling — PipeWire's conventions.
+# Bare values, hyphen spelling. PipeWire's conventions.
 # No icon key here: PipeWire documents `media.icon-name` for media objects but
 # nothing equivalent for applications, and pipewire-pulse already carries the
 # PulseAudio one above, which is the path Qt actually takes.
@@ -158,7 +158,7 @@ if __name__ == "__main__":      # self-check: python3 core/audio_identity.py
     apply()
     assert os.environ["PULSE_PROP_OVERRIDE"] == _before
 
-    # Anything the user set survives and still wins — both parsers take the last
+    # Anything the user set survives and still wins. Both parsers take the last
     # assignment, so ours going first is what makes theirs override it.
     _run({"PULSE_PROP_OVERRIDE": "application.name='Mine'",
           "PIPEWIRE_PROPS": "{ node.latency=256/48000 }"})
@@ -168,12 +168,12 @@ if __name__ == "__main__":      # self-check: python3 core/audio_identity.py
     assert "node.latency=256/48000" in _pw, _pw
     assert _pw.count("{") == 1 and _pw.count("}") == 1, _pw   # two objects would not parse
 
-    # PIPEWIRE_PROPS also takes a bare key=value list; fold that in as well.
+    # PIPEWIRE_PROPS also takes a bare key=value list. Fold that in as well.
     _run({"PIPEWIRE_PROPS": "node.latency=256/48000"})
     assert os.environ["PIPEWIRE_PROPS"].startswith("{ application.name=")
     assert "node.latency=256/48000" in os.environ["PIPEWIRE_PROPS"]
 
-    # RESOURCE_NAME is a plain default — a user value is left alone.
+    # RESOURCE_NAME is a plain default. A user value is left alone.
     _run({"RESOURCE_NAME": "custom"})
     assert os.environ["RESOURCE_NAME"] == "custom"
 
