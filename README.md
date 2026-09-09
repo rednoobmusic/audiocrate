@@ -139,6 +139,13 @@ Version lives in `core/_version.py` and is the single source of truth.
 
 ## License
 
-GPL-2.0-or-later. See [LICENSE](LICENSE). AudioCrate links Furnace's engine,
-which is GPL-2.0-or-later, so the combined work is GPL. Release zips include
-the full source (`source/` inside the app archive) to satisfy that.
+GPL-2.0-or-later. See [LICENSE](LICENSE). AudioCrate links two GPL libraries,
+Furnace's engine for `.fur` playback and libsidplayfp for SID, and both are
+GPL-2.0-or-later, so the combined work is GPL. Either one on its own would be
+enough for that. Release zips include the full source (`source/` inside the app
+archive) to satisfy it.
+
+Nothing else it uses forces the licence. libgme, projectM and Qt through PySide6
+are LGPL, and ffmpeg, zxtune123 and openmpt123 run as separate processes. The
+grant has to be GPL-2.0-or-later rather than plain GPL-2 because PySide6 is
+LGPL-3, which GPL-2 alone cannot absorb.
