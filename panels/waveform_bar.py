@@ -16,7 +16,7 @@ except ImportError:
     def _qt_valid(obj) -> bool:
         return obj is not None
 
-# ── waveform cache ─────────────────────────────────────────────────────────────
+# waveform cache
 _RATE = 22050
 _N_POINTS = 4096  # internal resolution; downsampled to pixel width at draw time
 _MAX_CACHE = 60
@@ -250,7 +250,7 @@ class WaveformBar(QWidget):
         self._position = max(0.0, min(1.0, frac))
         self.update()
 
-    # ── .fur progressive waveform (streamed from FurPlayer output) ──────────────
+    # .fur progressive waveform (streamed from FurPlayer output)
 
     def fur_begin(self):
         """Start a fresh progressive waveform for a .fur track."""

@@ -67,7 +67,7 @@ class _MPRISPlayer(QDBusAbstractAdaptor):
         self.setAutoRelaySignals(False)
         self._player = player
 
-    # ── properties ────────────────────────────────────────────────────────────
+    # properties
 
     @property
     def PlaybackStatus(self) -> str:
@@ -135,7 +135,7 @@ class _MPRISPlayer(QDBusAbstractAdaptor):
     @property
     def CanControl(self) -> bool:    return True
 
-    # ── methods ───────────────────────────────────────────────────────────────
+    # methods
 
     def Next(self):          self._player.next()
     def Previous(self):      self._player.prev()

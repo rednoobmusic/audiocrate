@@ -52,7 +52,7 @@ class _GLViz(QOpenGLWindow):
         dpr = self.devicePixelRatio()
         return max(1, int(round(self.width() * dpr))), max(1, int(round(self.height() * dpr)))
 
-    # ── GL lifecycle (context current in these callbacks) ────────────────────────
+    # GL lifecycle (context current in these callbacks)
     def initializeGL(self):
         try:
             w, h = self._fb_size()
@@ -85,7 +85,7 @@ class _GLViz(QOpenGLWindow):
             log.warning("projectM render error: %s", e)
             self._timer.stop()
 
-    # ── controls (forwarded from the panel) ──────────────────────────────────────
+    # controls (forwarded from the panel)
     def next_preset(self):
         if self._engine:
             self._engine.next_preset(False)   # soft/blended, like the site's ›
@@ -202,7 +202,7 @@ class VisualizerPanel(QWidget):
         self._gl._pending_preset = self._pending_preset
         self._gl.apply_pending_preset()
 
-    # ── persisted toggle state (saved in ui_state.json) ───────────────────────
+    # persisted toggle state (saved in ui_state.json)
     @property
     def locked(self) -> bool:
         return self._b_lock.isChecked()

@@ -52,7 +52,7 @@ body {
   user-select: none;
 }
 
-/* ── chrome ────────────────────────────────────────────────────────────── */
+/* chrome */
 
 ion-toolbar {
   --background: var(--ac-bg);
@@ -193,7 +193,7 @@ ion-action-sheet .action-sheet-button {
   font-size: 13px;
 }
 
-/* ── shared bits ───────────────────────────────────────────────────────── */
+/* shared bits */
 
 .ac-art {
   background: var(--ac-bg3);
@@ -246,7 +246,7 @@ ion-action-sheet .action-sheet-button {
   text-transform: uppercase;
 }
 
-/* ── login ─────────────────────────────────────────────────────────────── */
+/* login */
 
 .ac-login {
   min-height: 100%;
@@ -328,7 +328,7 @@ ion-action-sheet .action-sheet-button {
 
 .ac-shake { animation: ac-shake 320ms ease; }
 
-/* ── now playing ───────────────────────────────────────────────────────── */
+/* now playing */
 
 .ac-now {
   display: flex;
@@ -388,7 +388,7 @@ ion-action-sheet .action-sheet-button {
 
 .ac-seek { padding: 0; }
 
-/* ── waveform seek bar ─────────────────────────────────────────────────── */
+/* waveform seek bar */
 
 .ac-wave {
   position: relative;
@@ -506,7 +506,7 @@ ion-action-sheet .action-sheet-button {
 
 .ac-volume { display: flex; align-items: center; gap: 10px; color: var(--ac-fg-dim); }
 
-/* ── mini player ───────────────────────────────────────────────────────── */
+/* mini player */
 
 /* Floats above the tab bar. Ionic's iOS tab bar is 50px; the safe-area inset
    keeps it clear of the home indicator. */
@@ -566,7 +566,7 @@ ion-content { --padding-bottom: 62px; }
 .ac-mini-progress { height: 3px; background: var(--ac-bg3); }
 .ac-mini-progress > div { height: 100%; background: var(--ac-fg); transition: width 240ms linear; }
 
-/* ── lists ─────────────────────────────────────────────────────────────── */
+/* lists */
 
 .ac-row-art, .ac-row-art.ac-art-fallback {
   width: 44px;

@@ -22,7 +22,7 @@ from scipy.signal import lfilter
 _FS = 44100
 
 
-# ── biquad coefficients (Web Audio BiquadFilterNode / RBJ cookbook) ──────────
+# biquad coefficients (Web Audio BiquadFilterNode / RBJ cookbook)
 
 def _biquad(kind: str, f0: float, q: float, gain_db: float, fs: int = _FS):
     w0 = 2.0 * np.pi * f0 / fs
@@ -107,7 +107,7 @@ def _sat(x: np.ndarray, drive: float) -> np.ndarray:
     return np.tanh(xc * drive) / np.tanh(drive)
 
 
-# ── adaptive gain: per-track high/low spectral ratio (mirrors MiniPlayer) ────
+# adaptive gain: per-track high/low spectral ratio (mirrors MiniPlayer)
 
 def high_ratio(mono: np.ndarray, fs: int = _FS) -> float:
     """Reproduce MiniPlayer's adaptAnalyser ratio: fftSize 512, byte-scaled
@@ -209,7 +209,7 @@ class Enhancer:
         self._lim_a = np.array([1.0, -rel])
         self._lim_zi = np.zeros(1)
 
-    # ── controls ────────────────────────────────────────────────────────────
+    # controls
     def set_enabled(self, on: bool):
         self._enabled = bool(on)
 
@@ -233,7 +233,7 @@ class Enhancer:
         self._bassLevel    = 0.07 if r > 0.6 else 0.06 if r > 0.4 else 0.05 if r > 0.2 else 0.04
         self._subHarmLevel = 0.04 if r > 0.6 else 0.03 if r > 0.4 else 0.022 if r > 0.2 else 0.015
 
-    # ── per-buffer processing ─────────────────────────────────────────────────
+    # per-buffer processing
     def process(self, block: np.ndarray) -> np.ndarray:
         """block: (N, 2) float32 → (N, 2) float32."""
         if not self._enabled:
@@ -290,7 +290,7 @@ class Enhancer:
         self._lim_zi = np.zeros(1)
 
 
-# ── User parametric EQ ───────────────────────────────────────────────────────
+# User parametric EQ
 
 EQ_TYPES = ("peaking", "lowshelf", "highshelf", "lowpass", "highpass", "notch")
 EQ_FMIN, EQ_FMAX = 20.0, 20000.0
@@ -371,7 +371,7 @@ class ParametricEQ:
         self.input_gain = 0.0
         self.output_gain = 0.0
 
-    # ── processing ──────────────────────────────────────────────────────────
+    # processing
     def process(self, block: np.ndarray) -> np.ndarray:
         if not self.enabled or not self.bands:
             return block
@@ -392,7 +392,7 @@ class ParametricEQ:
         for b in self.bands:
             b.reset()
 
-    # ── display ─────────────────────────────────────────────────────────────
+    # display
     def response_db(self, freqs: np.ndarray) -> np.ndarray:
         """Combined magnitude response (dB) of all enabled bands + output trim."""
         total = np.full(len(freqs), float(self.output_gain), dtype=np.float64)
@@ -404,7 +404,7 @@ class ParametricEQ:
                 total += b.response(ejw, ejw2)
         return total
 
-    # ── editing ─────────────────────────────────────────────────────────────
+    # editing
     def add_band(self, freq, gain=0.0, q=1.0, btype="peaking", slope=12) -> EqBand:
         b = EqBand(btype, freq, gain, q, True, slope, self._fs)
         self.bands.append(b)
@@ -414,7 +414,7 @@ class ParametricEQ:
         if band in self.bands:
             self.bands.remove(band)
 
-    # ── persistence ─────────────────────────────────────────────────────────
+    # persistence
     def to_dict(self):
         return {
             "enabled": self.enabled,

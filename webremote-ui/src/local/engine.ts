@@ -95,7 +95,7 @@ export class LocalEngine {
     })
   }
 
-  // ── setup ───────────────────────────────────────────────────────────────
+  // setup
 
   async load(): Promise<Manifest> {
     const res = await fetch(`${this.base}/media/manifest.json`, { cache: 'no-cache' })
@@ -178,7 +178,7 @@ export class LocalEngine {
     this.scheduleSave()
   }
 
-  // ── persistence ─────────────────────────────────────────────────────────
+  // persistence
 
   /** Queue, play order, toggles and position survive a reload. Debounced
    *  because `timeupdate` fires several times a second. */
@@ -237,7 +237,7 @@ export class LocalEngine {
     }
   }
 
-  // ── urls ────────────────────────────────────────────────────────────────
+  // urls
 
   audioUrl(t: ManifestTrack): string { return `${this.base}/media/audio/${t.id}.opus` }
   artUrl(t: ManifestTrack, size: 256 | 640 = 256): string {
@@ -246,7 +246,7 @@ export class LocalEngine {
 
   get current(): ManifestTrack | undefined { return this.queue[this.index] }
 
-  // ── state, shaped like the server snapshot ──────────────────────────────
+  // state, shaped like the server snapshot
 
   snapshot(): PlayerState {
     const t = this.current
@@ -325,7 +325,7 @@ export class LocalEngine {
     }
   }
 
-  // ── transport ───────────────────────────────────────────────────────────
+  // transport
 
   async play() {
     this.ensureGraph()
@@ -387,7 +387,7 @@ export class LocalEngine {
 
   setMode(m: number) { this.mode = ((m % 3) + 3) % 3; this.emit() }
 
-  // ── queue ───────────────────────────────────────────────────────────────
+  // queue
 
   /** Unique by id, matching the desktop player's unique-by-path queue.
    *  Returns how many were actually added. */

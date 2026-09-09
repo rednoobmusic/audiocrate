@@ -386,7 +386,7 @@ class MainWindow(QMainWindow):
         if e.type() == QEvent.Type.WindowStateChange:
             self._update_visual_suspend()
 
-    # ── drag & drop: enqueue dropped audio files / folders ───────────────────────
+    # drag & drop: enqueue dropped audio files / folders
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
@@ -1163,7 +1163,7 @@ class MainWindow(QMainWindow):
             f"<p>PySide6 {_pyside}{extra}</p>",
         )
 
-    # ── View menu: collapsible categories + per-item glyph icons ─────────────────
+    # View menu: collapsible categories + per-item glyph icons
     _VIEW_ICONS = {
         "Spectrum":     "\U000f0128",   # chart-bar
         "Oscilloscope": "\U000f095b",   # sine-wave
@@ -1257,7 +1257,7 @@ class MainWindow(QMainWindow):
         _add("End of track", self._sleep_end_of_track, key="eot")
         _add("Custom…", self._sleep_custom, key="custom")
 
-    # ── sleep timer handlers ───────────────────────────────────────────────────
+    # sleep timer handlers
 
     def _sleep_off(self, *_):
         self._sleep.cancel()

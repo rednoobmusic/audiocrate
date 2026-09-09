@@ -74,7 +74,7 @@ class _EqCurve(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-    # ── run only when visible & focused (perf — frees frames when hidden) ───────
+    # run only when visible & focused (perf — frees frames when hidden)
 
     def set_suspended(self, suspended: bool):
         self._suspended = bool(suspended)
@@ -153,7 +153,7 @@ class _EqCurve(QWidget):
         self.selectionChanged.emit()
         self.update()
 
-    # ── coordinate mapping ─────────────────────────────────────────────────
+    # coordinate mapping
     def _f2x(self, f):
         W = max(1, self.width())
         return math.log(max(EQ_FMIN, f) / EQ_FMIN) / math.log(EQ_FMAX / EQ_FMIN) * W
@@ -191,7 +191,7 @@ class _EqCurve(QWidget):
                 best, bestd = i, d
         return best
 
-    # ── painting ────────────────────────────────────────────────────────────
+    # painting
     def paintEvent(self, _):
         W, H = self.width(), self.height()
         if W <= 0 or H <= 0:
@@ -276,7 +276,7 @@ class _EqCurve(QWidget):
             p.setPen(QColor("#ffffff")); p.setFont(QFont("", 7, QFont.Bold))
             p.drawText(int(hp.x()) - 4, int(hp.y()) + 4, str(i + 1))
 
-    # ── interaction ───────────────────────────────────────────────────────────
+    # interaction
     def mousePressEvent(self, e):
         pos = e.position()
         if e.button() == Qt.LeftButton:
@@ -343,7 +343,7 @@ class EqWidget(QWidget):
         self._save_timer.setInterval(400)
         self._save_timer.timeout.connect(self._save_state)
 
-    # ── ui ──────────────────────────────────────────────────────────────────
+    # ui
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -418,7 +418,7 @@ class EqWidget(QWidget):
         flat.clicked.connect(self._flat); row2.addWidget(flat)
         root.addLayout(row2)
 
-    # ── selection / field sync ────────────────────────────────────────────────
+    # selection / field sync
     def _sync_band_controls(self):
         self._loading = True
         idx = self._curve.selected
@@ -522,7 +522,7 @@ class EqWidget(QWidget):
     def set_suspended(self, suspended: bool):
         self._curve.set_suspended(suspended)
 
-    # ── persistence ───────────────────────────────────────────────────────────
+    # persistence
     def _queue_save(self):
         if not self._loading:
             self._save_timer.start()
@@ -555,7 +555,7 @@ class EqWidget(QWidget):
             self._set_defaults()   # fresh: flat with HP + LP dots
         self._apply_to_ui()
 
-    # ── presets ─────────────────────────────────────────────────────────────
+    # presets
     @staticmethod
     def _migrate_presets():
         """One-time move of presets from the old config dir to ~/Documents/EQPresets."""

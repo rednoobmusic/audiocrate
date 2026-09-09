@@ -20,7 +20,7 @@ from native_lock import RENDER_LOCK
 from PySide6.QtCore    import QObject, Signal, QTimer
 from PySide6.QtMultimedia import QAudioSink, QAudioFormat, QAudioDevice
 
-# ── load the shared library ────────────────────────────────────────────────────
+# load the shared library
 
 _SO_SEARCH = [
     Path(__file__).parent / "libfurnace_wrap.so",
@@ -39,7 +39,7 @@ for _p in _SO_SEARCH:
 
 FUR_EXTS = {".fur"}
 
-# ── C struct ───────────────────────────────────────────────────────────────────
+# C struct
 
 class _FurnaceInfo(ctypes.Structure):
     _fields_ = [
@@ -54,7 +54,7 @@ class _FurnaceInfo(ctypes.Structure):
         ("subsong_count", ctypes.c_int),
     ]
 
-# ── wire up signatures ─────────────────────────────────────────────────────────
+# wire up signatures
 
 def _wire():
     if _lib is None:
@@ -139,7 +139,7 @@ def _wire():
 _wire()
 
 
-# ── global engine Python-side lock ────────────────────────────────────────────
+# global engine Python-side lock
 # The C++ g_meta_mutex serializes calls at the C++ level, but Python threads
 # release the GIL for ctypes calls and can interleave in ways that cause the
 # C++ allocator to see concurrent heap operations even with the C mutex held.
@@ -164,7 +164,7 @@ def _tag_key(path: Path):
         return (str(path), 0, 0)
 
 
-# ── metadata helper ────────────────────────────────────────────────────────────
+# metadata helper
 
 _CH_STRIDE = 32   # bytes per channel name slot in the flat buffer
 
@@ -224,7 +224,7 @@ def fur_tags(path: Path) -> dict:
     return out
 
 
-# ── FurPlayer ──────────────────────────────────────────────────────────────────
+# FurPlayer
 
 _CHUNK      = 1024          # frames per render call
 _LOOPS      = 1             # single pass; Player controls repeat policy
@@ -283,7 +283,7 @@ class FurPlayer(QObject):
         self._sink: QAudioSink | None = None   # created on render thread
         self._rate: int = _RATE                # actual engine sample rate
 
-    # ── load ──────────────────────────────────────────────────────────────────
+    # load
 
     def load(self, path: Path) -> bool:
         self.stop()
@@ -351,7 +351,7 @@ class FurPlayer(QObject):
         })
         return True
 
-    # ── playback ───────────────────────────────────────────────────────────────
+    # playback
 
     def play(self, loops: int = _LOOPS):
         self.stop()
@@ -390,7 +390,7 @@ class FurPlayer(QObject):
         with self._engine_lock:
             return _lib.fw_is_playing(self._handle) != 0
 
-    # ── volume ─────────────────────────────────────────────────────────────────
+    # volume
 
     @property
     def volume(self) -> float:
@@ -402,7 +402,7 @@ class FurPlayer(QObject):
         if self._sink:
             self._sink.setVolume(self._base_vol)
 
-    # ── seek ───────────────────────────────────────────────────────────────────
+    # seek
 
     def seek(self, frac: float):
         """Seek to fractional position (0..1). Snaps to nearest order."""
@@ -419,7 +419,7 @@ class FurPlayer(QObject):
             self._rendered_frames = int(us / 1_000_000 * self._rate)
             self._flush_after_seek = True
 
-    # ── position ───────────────────────────────────────────────────────────────
+    # position
 
     @property
     def position_ms(self) -> int:
@@ -444,7 +444,7 @@ class FurPlayer(QObject):
         dur_ms = self.duration_ms
         self.position_changed.emit(frac, pos_ms, dur_ms)
 
-    # ── per-channel VU ─────────────────────────────────────────────────────────
+    # per-channel VU
 
     def channel_vu(self, ch: int) -> float:
         if not self._engine_lock.acquire(blocking=False):
@@ -481,7 +481,7 @@ class FurPlayer(QObject):
         except Exception:
             return True
 
-    # ── render thread ──────────────────────────────────────────────────────────
+    # render thread
 
     def _render_loop(self):
         fmt = QAudioFormat()
@@ -565,7 +565,7 @@ class FurPlayer(QObject):
                 from PySide6.QtCore import QMetaObject, Qt
                 QMetaObject.invokeMethod(self, "finished", Qt.QueuedConnection)
 
-    # ── waveform pre-render ────────────────────────────────────────────────────
+    # waveform pre-render
 
     def stream_reader(self, path: Path, rate: int):
         """A chunk-at-a-time reader for DspEngine.load_stream().
@@ -739,7 +739,7 @@ class FurPlayer(QObject):
     def has_engine(self) -> bool:
         return self.__handle is not None
 
-    # ── cleanup ────────────────────────────────────────────────────────────────
+    # cleanup
 
     def __del__(self):
         self._render_stop.set()

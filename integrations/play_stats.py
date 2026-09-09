@@ -70,7 +70,7 @@ class PlayStatsTracker(QObject):
     def enabled(self) -> bool:
         return self._enabled
 
-    # ── persistence ──────────────────────────────────────────────────────
+    # persistence
     def _load(self) -> dict:
         try:
             return json.loads(_STATS_FILE.read_text(encoding="utf-8"))
@@ -99,7 +99,7 @@ class PlayStatsTracker(QObject):
         if self._dirty:
             self._save()
 
-    # ── tracking ─────────────────────────────────────────────────────────
+    # tracking
     def _on_track_changed(self, _track):
         self._tracker.reset()
 
@@ -142,7 +142,7 @@ class PlayStatsTracker(QObject):
         self._queue_save()
         self.stats_changed.emit()
 
-    # ── queries (for the Stats panel) ───────────────────────────────────
+    # queries (for the Stats panel)
     def total_listened_ms(self) -> int:
         return int(self._data.get("total_listened_ms", 0))
 

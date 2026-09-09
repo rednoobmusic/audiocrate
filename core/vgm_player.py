@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QAudioDevice, QMediaDevices
 
-# ── libgme binding ─────────────────────────────────────────────────────────────
+# libgme binding
 _lib = ctypes.CDLL("libgme.so")
 
 _lib.gme_open_file.argtypes  = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_int]
@@ -145,7 +145,7 @@ class VgmPlayer(QObject):
         self._pos_timer.setInterval(100)
         self._pos_timer.timeout.connect(self._emit_position)
 
-    # ── public API ──────────────────────────────────────────────────────────────
+    # public API
 
     def set_audio_device(self, device: QAudioDevice):
         self._device = device
@@ -298,7 +298,7 @@ class VgmPlayer(QObject):
                 _lib.gme_delete(self._emu)
                 self._emu = None
 
-    # ── internals ───────────────────────────────────────────────────────────────
+    # internals
 
     def _get_track_length(self, idx: int) -> int:
         info_ptr = ctypes.POINTER(_GmeInfo)()

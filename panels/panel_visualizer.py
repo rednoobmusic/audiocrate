@@ -101,7 +101,7 @@ class VisualizerWidget(QWidget):
         self._tick_timer.timeout.connect(self._tick)
         # Only runs while actually visible + focused (see _sync_timer / showEvent).
 
-    # ── run only when visible & focused (perf: no FFT/redraw when hidden) ───────
+    # run only when visible & focused (perf: no FFT/redraw when hidden)
 
     def set_suspended(self, suspended: bool):
         self._suspended = bool(suspended)

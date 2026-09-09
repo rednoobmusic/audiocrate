@@ -93,7 +93,7 @@ class _AudioScrobblerService:
     def is_authenticated(self) -> bool:
         return bool(self.username and self.session_key)
 
-    # ── session persistence ──────────────────────────────────────────────
+    # session persistence
     def _session_file(self) -> Path:
         return Path.home() / ".config" / "audiocrate" / f"scrobble_{self.name.lower()}.json"
 
@@ -123,7 +123,7 @@ class _AudioScrobblerService:
         except Exception:
             pass
 
-    # ── signing (MD5 of sorted key+value pairs + shared secret) ────────────
+    # signing (MD5 of sorted key+value pairs + shared secret)
     def _sign(self, params: dict) -> str:
         data = "".join(k + v for k, v in sorted(params.items())) + self.api_secret
         return hashlib.md5(data.encode("utf-8")).hexdigest()
@@ -196,7 +196,7 @@ class _AudioScrobblerService:
         self.session_key = session["key"]
         self.save_session()
 
-    # ── playback reporting ──────────────────────────────────────────────
+    # playback reporting
     def update_now_playing(self, artist: str, title: str, album: str, duration_ms: int):
         params = {
             "method": "track.updateNowPlaying",
@@ -318,7 +318,7 @@ class ScrobbleController(QObject):
         for name in self._services:
             self._services[name].load_session()
 
-    # ── configuration (from Settings) ───────────────────────────────────
+    # configuration (from Settings)
     def configure(self, name: str, *, enabled: bool, api_key: str, api_secret: str):
         svc = self._services[name]
         changed = api_key.strip() != svc.api_key or api_secret.strip() != svc.api_secret
@@ -397,7 +397,7 @@ class ScrobbleController(QObject):
         self._submit_timer.stop()
         self._now_playing_timer.stop()
 
-    # ── playback tracking (the played-threshold rule) ───────────────────
+    # playback tracking (the played-threshold rule)
     def _on_track_changed(self, track):
         self._session_start_ms = int(time.time() * 1000)
         self._tracker.reset()
@@ -449,7 +449,7 @@ class ScrobbleController(QObject):
 
             threading.Thread(target=_work, daemon=True).start()
 
-    # ── submission with retry/backoff (mirrors fooyin's doDelayedSubmit) ───
+    # submission with retry/backoff (mirrors fooyin's doDelayedSubmit)
     def _schedule_submit(self, name: str, immediate: bool = False):
         if name in self._submitting or self._auth_failed[name]:
             return

@@ -314,7 +314,7 @@ class Player(QObject):
         self._media.positionChanged.connect(self._on_pos)
         self._media.mediaStatusChanged.connect(self._on_status)
 
-    # ── audio device ──────────────────────────────────────────────────────────
+    # audio device
 
     def set_video_output(self, widget):
         self._media.setVideoOutput(widget)
@@ -335,7 +335,7 @@ class Player(QObject):
         """Crossfade between consecutive audio tracks (0 = off → gapless)."""
         self._dsp.set_crossfade(ms)
 
-    # ── sleep timer "end of track" ─────────────────────────────────────────────
+    # sleep timer "end of track"
 
     def set_stop_after_current(self, on: bool):
         """When on, playback stops once the current track ends instead of
@@ -358,7 +358,7 @@ class Player(QObject):
             return True
         return False
 
-    # ── Enhance DSP ("magic wand") ─────────────────────────────────────────────
+    # Enhance DSP ("magic wand")
 
     def set_enhance(self, on: bool):
         # Live wet/dry switch in the DSP engine's signal path — instant, no reload.
@@ -390,7 +390,7 @@ class Player(QObject):
     def audio_devices() -> list[QAudioDevice]:
         return QMediaDevices.audioOutputs()
 
-    # ── volume / fade ─────────────────────────────────────────────────────────
+    # volume / fade
 
     def _start_fade(self, start: float, end: float, callback=None):
         self._fade_timer.stop()
@@ -412,7 +412,7 @@ class Player(QObject):
                 cb, self._fade_cb = self._fade_cb, None
                 cb()
 
-    # ── state signals ─────────────────────────────────────────────────────────
+    # state signals
 
     def _on_state(self, state):
         self.state_changed.emit(self._media.playbackState() ==
@@ -439,7 +439,7 @@ class Player(QObject):
         elif not self._consume_stop_after_current():
             self.next()
 
-    # ── play-order helper (used for gapless preload + Up Next) ─────────────────
+    # play-order helper (used for gapless preload + Up Next)
 
     def _next_queue_idx(self) -> int:
         """Return the queue index that would play after current, or -1."""
@@ -465,7 +465,7 @@ class Player(QObject):
                 return self._idx + 1
             return -1
 
-    # ── playback control ──────────────────────────────────────────────────────
+    # playback control
 
     def _on_vgm_finished(self):
         self._vgm_active = False
@@ -488,7 +488,7 @@ class Player(QObject):
             return
         ext = t.path.suffix.lower()
 
-        # ── C64 SID: scan (render + resolve length) → DSP engine ──────────────
+        # C64 SID: scan (render + resolve length) → DSP engine
         # SIDs carry no duration, so the tune is scanned once before it plays;
         # by the time audio starts the length is known and the seek bar is real.
         if SID_ENABLED and ext in _SID_EXTS and sid_player.available():
@@ -572,7 +572,7 @@ class Player(QObject):
             return
         self._sid_path = None
 
-        # ── Furnace .fur modules: render via libfurnace → DSP engine ──────────
+        # Furnace .fur modules: render via libfurnace → DSP engine
         # Rendered up-front (fast: well under a second for a typical module) and
         # played through the engine like every other chiptune, so EQ/Enhance,
         # the engine-driven visualizers, the waveform bar and sample-accurate
@@ -633,7 +633,7 @@ class Player(QObject):
             return
         self._stop_fur()
 
-        # ── AY/YM/VGM + tracker modules: render to WAV (zxtune/openmpt) → DSP ──
+        # AY/YM/VGM + tracker modules: render to WAV (zxtune/openmpt) → DSP
         # Rendered playback gives correct timing (fixes slow/looping .ay), AY/X1
         # VGM that libgme can't do, and full waveform/seek/visualizers/DSP.
         if cli_render.supported(ext):
@@ -661,7 +661,7 @@ class Player(QObject):
             threading.Thread(target=_work, daemon=True).start()
             return
 
-        # ── VGM/chiptune formats: libgme ──────────────────────────────────────
+        # VGM/chiptune formats: libgme
         if ext in _GME_EXTS:
             self._stop_media()
             self._stop_dsp()
@@ -679,7 +679,7 @@ class Player(QObject):
             self._vgm.stop()
             self._vgm_active = False
 
-        # ── Video: QMediaPlayer (no DSP) ──────────────────────────────────────
+        # Video: QMediaPlayer (no DSP)
         if ext in VIDEO_EXTS:
             self._stop_dsp()
             self._out.setVolume(0.0)
@@ -693,7 +693,7 @@ class Player(QObject):
             self._fail_streak = 0
             return
 
-        # ── Plain audio: real-time DSP engine (live Enhance) ──────────────────
+        # Plain audio: real-time DSP engine (live Enhance)
         self._stop_media()
         self._dsp_active = True
         self._dsp.volume = self._base_vol
@@ -867,7 +867,7 @@ class Player(QObject):
         self._shuffle = list(range(len(self._queue)))
         random.shuffle(self._shuffle)
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # public API
 
     def add(self, path: Path):
         if path in self._paths:
@@ -973,7 +973,7 @@ class Player(QObject):
         else:
             _do_stop()
 
-    # ── subsongs (multi-tune chiptunes: NSF/SAP/GBS/AY/KSS/SID…) ─────────────────
+    # subsongs (multi-tune chiptunes: NSF/SAP/GBS/AY/KSS/SID…)
     @property
     def subsong_count(self) -> int:
         if self._sid_path is not None:
@@ -1133,7 +1133,7 @@ class Player(QObject):
             return
         self._media.setPosition(max(0, self._media.position() + seconds * 1000))
 
-    # ── mode setter (updates loop flag on active player) ──────────────────────
+    # mode setter (updates loop flag on active player)
 
     @property
     def mode(self) -> int:
@@ -1173,7 +1173,7 @@ class Player(QObject):
                 rest = rest + list(range(0, self._idx))
         return rest[:limit]
 
-    # ── properties ────────────────────────────────────────────────────────────
+    # properties
 
     @property
     def is_playing(self) -> bool:

@@ -33,7 +33,7 @@ def _load():
         return False
 
     h = ctypes.c_void_p
-    # ── core (libprojectM-4) ──────────────────────────────────────────────────
+    # core (libprojectM-4)
     _core.projectm_create.restype  = h
     _core.projectm_destroy.argtypes = [h]
     _core.projectm_set_window_size.argtypes = [h, ctypes.c_size_t, ctypes.c_size_t]
@@ -52,7 +52,7 @@ def _load():
     _core.projectm_pcm_get_max_samples.restype = ctypes.c_uint
     _core.projectm_get_version_string.restype  = ctypes.c_char_p
 
-    # ── playlist (libprojectM-4-playlist) ─────────────────────────────────────
+    # playlist (libprojectM-4-playlist)
     ph = ctypes.c_void_p
     _pl.projectm_playlist_create.restype  = ph
     _pl.projectm_playlist_create.argtypes = [h]

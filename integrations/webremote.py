@@ -73,7 +73,7 @@ _MIME = {
 }
 
 
-# ── config / crypto ───────────────────────────────────────────────────────────
+# config / crypto
 
 def _b64e(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -133,7 +133,7 @@ def set_pin(pin: str):
     save_config(cfg)
 
 
-# ── token ─────────────────────────────────────────────────────────────────────
+# token
 
 def _sign(payload: bytes, secret: bytes) -> str:
     return _b64e(hmac.new(secret, payload, hashlib.sha256).digest())
@@ -156,7 +156,7 @@ def check_token(token: str, secret: bytes) -> bool:
         return False
 
 
-# ── the Qt-side service ───────────────────────────────────────────────────────
+# the Qt-side service
 
 class WebRemote(QObject):
     """Owns the HTTP server, the state snapshot and the command queue."""
@@ -200,7 +200,7 @@ class WebRemote(QObject):
         except Exception:
             log.exception("web remote: could not connect player signals")
 
-    # ── lifecycle ─────────────────────────────────────────────────────────────
+    # lifecycle
 
     def start(self) -> bool:
         bind = os.environ.get("AUDIOCRATE_WEB_BIND", self._cfg.get("bind", "127.0.0.1"))
@@ -233,7 +233,7 @@ class WebRemote(QObject):
                 pass
             self._httpd = None
 
-    # ── state snapshot (GUI thread) ───────────────────────────────────────────
+    # state snapshot (GUI thread)
 
     def _on_error(self, msg: str):
         self._err = msg or ""
@@ -315,7 +315,7 @@ class WebRemote(QObject):
         with self._lock:
             return dict(self._queue_snap)
 
-    # ── commands (GUI thread) ─────────────────────────────────────────────────
+    # commands (GUI thread)
 
     def _apply(self, action: str, value):
         p = self._window._player if self._window else self._player
@@ -375,7 +375,7 @@ class WebRemote(QObject):
                     return
             log.warning("enqueue_play: %s not found in queue after add", target)
 
-    # ── auth helpers (HTTP thread) ────────────────────────────────────────────
+    # auth helpers (HTTP thread)
 
     def verify_pin(self, ip: str, pin: str) -> bool:
         now = time.time()
@@ -408,7 +408,7 @@ class WebRemote(QObject):
     def new_token(self) -> str:
         return make_token(self._secret)
 
-    # ── library (HTTP thread, private sqlite conn) ─────────────────────────────
+    # library (HTTP thread, private sqlite conn)
 
     def _db(self) -> sqlite3.Connection | None:
         conn = getattr(self._tls, "conn", None)
@@ -526,7 +526,7 @@ class WebRemote(QObject):
             })
         return {"name": name, "items": items}
 
-    # ── waveform ──────────────────────────────────────────────────────────────
+    # waveform
 
     def waveform(self, path: Path, key: str, n: int = WAVE_POINTS) -> list[int] | None:
         """RMS envelope for the waveform seek bar, as n ints 0-100.
@@ -645,7 +645,7 @@ def _art_key(path: Path) -> str:
     return hashlib.sha1(f"{path}|{mt}".encode()).hexdigest()[:16]
 
 
-# ── HTTP ──────────────────────────────────────────────────────────────────────
+# HTTP
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "AudioCrate"

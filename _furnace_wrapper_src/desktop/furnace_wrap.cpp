@@ -48,7 +48,7 @@ struct FurnaceCtx {
     }
 };
 
-/* ── create / destroy ──────────────────────────────────────────────────────── */
+/* create / destroy */
 
 FurnaceHandle fw_create(void) {
     return new FurnaceCtx;
@@ -58,7 +58,7 @@ void fw_destroy(FurnaceHandle h) {
     delete static_cast<FurnaceCtx*>(h);
 }
 
-/* ── helpers ───────────────────────────────────────────────────────────────── */
+/* helpers */
 
 static bool _read_file(const char* path, unsigned char** out_buf, long* out_sz) {
     FILE* f = fopen(path, "rb");
@@ -103,7 +103,7 @@ static void _fill_info(FurnaceCtx* ctx, FurnaceInfo* info, const char* path) {
     }
 }
 
-/* ── global singleton for thread-safe metadata reads ───────────────────────── */
+/* global singleton for thread-safe metadata reads */
 
 static std::mutex   g_meta_mutex;
 static DivEngine*   g_meta_engine  = nullptr;
@@ -203,7 +203,7 @@ int fw_read_meta_path(const char* path, FurnaceInfo* out_info,
     return 0;
 }
 
-/* ── render full song to WAV (global singleton engine) ─────────────────────── */
+/* render full song to WAV (global singleton engine) */
 
 /* Minimal WAV header writer — 16-bit stereo PCM */
 static void _write_wav_header(FILE* f, int sample_rate, int n_frames) {
@@ -219,7 +219,7 @@ static void _write_wav_header(FILE* f, int sample_rate, int n_frames) {
     fwrite("data",4,1,f); wr32(data_bytes);
 }
 
-/* ── streaming render on the singleton engine ──────────────────────────────
+/* streaming render on the singleton engine
  * fw_render_wav_path has to finish the whole module before a note can play,
  * which is seconds for a long tune. These pull it a chunk at a time instead,
  * so playback can start on the first chunk and render the rest underneath.
@@ -380,7 +380,7 @@ int fw_render_wav_path(const char* path, const char* out_wav, int loops,
     return (cancel_flag && *cancel_flag) ? -1 : 0;
 }
 
-/* ── read meta (no dispatch) ───────────────────────────────────────────────── */
+/* read meta (no dispatch) */
 
 int fw_read_meta(FurnaceHandle h, const char* path, FurnaceInfo* info) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -415,7 +415,7 @@ int fw_read_meta(FurnaceHandle h, const char* path, FurnaceInfo* info) {
        a subsequent fw_load() must still do the full init sequence. */
 }
 
-/* ── full load (dispatch + render) ─────────────────────────────────────────── */
+/* full load (dispatch + render) */
 
 int fw_load(FurnaceHandle h, const char* path, FurnaceInfo* info) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -470,7 +470,7 @@ void fw_set_sample_rate(FurnaceHandle h, int sample_rate) {
     ctx->engine.setConf("audioRate", sample_rate);
 }
 
-/* ── subsong select ────────────────────────────────────────────────────────── */
+/* subsong select */
 
 int fw_select_subsong(FurnaceHandle h, int subsong, FurnaceInfo* out_info) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -483,7 +483,7 @@ int fw_select_subsong(FurnaceHandle h, int subsong, FurnaceInfo* out_info) {
     return 0;
 }
 
-/* ── channel name ──────────────────────────────────────────────────────────── */
+/* channel name */
 
 const char* fw_channel_name(FurnaceHandle h, int ch) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -491,7 +491,7 @@ const char* fw_channel_name(FurnaceHandle h, int ch) {
     return (n && n[0]) ? n : "?";
 }
 
-/* ── playback ──────────────────────────────────────────────────────────────── */
+/* playback */
 
 void fw_play(FurnaceHandle h, int loops) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -518,7 +518,7 @@ int fw_is_playing(FurnaceHandle h) {
     return ctx->engine.isPlaying() ? 1 : 0;
 }
 
-/* ── seek ──────────────────────────────────────────────────────────────────── */
+/* seek */
 
 void fw_seek_order(FurnaceHandle h, int order) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -533,7 +533,7 @@ void fw_seek_order_row(FurnaceHandle h, int order, int row) {
     (void)row;
 }
 
-/* ── position ──────────────────────────────────────────────────────────────── */
+/* position */
 
 int fw_current_order(FurnaceHandle h) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -555,7 +555,7 @@ int64_t fw_order_row_to_us(FurnaceHandle h, int order, int row) {
     return (int64_t)t.seconds * 1000000LL + t.micros;
 }
 
-/* ── render ────────────────────────────────────────────────────────────────── */
+/* render */
 
 int fw_render(FurnaceHandle h, float* out, int n_frames) {
     auto* ctx = static_cast<FurnaceCtx*>(h);
@@ -613,7 +613,7 @@ int fw_render(FurnaceHandle h, float* out, int n_frames) {
     return done;
 }
 
-/* ── VU ────────────────────────────────────────────────────────────────────── */
+/* VU */
 
 float fw_channel_vu(FurnaceHandle h, int ch) {
     auto* ctx = static_cast<FurnaceCtx*>(h);

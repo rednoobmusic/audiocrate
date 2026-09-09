@@ -271,7 +271,7 @@ class DspEngine(QObject):
         self._postick.setInterval(100)
         self._postick.timeout.connect(self._emit_pos)
 
-    # ── DSP control ───────────────────────────────────────────────────────────
+    # DSP control
     def set_enabled(self, on: bool):
         self._enh.set_enabled(on)
 
@@ -283,7 +283,7 @@ class DspEngine(QObject):
     def enhance_enabled(self) -> bool:
         return self._enh.enabled
 
-    # ── load / decode ─────────────────────────────────────────────────────────
+    # load / decode
     def load(self, path: Path, normalize: bool = False, trim: bool = False):
         self.stop()
         self.clear_next()
@@ -486,7 +486,7 @@ class DspEngine(QObject):
             from applog import log
             log.exception("decode failed: %s", path)
 
-    # ── sink lifecycle (sink itself lives on the audio thread) ───────────────
+    # sink lifecycle (sink itself lives on the audio thread)
     def _start_sink(self):
         self._sink_alive = True
         self._sink_suspended = False
@@ -519,7 +519,7 @@ class DspEngine(QObject):
         self.state_changed.emit(False)
         self.finished.emit()
 
-    # ── feeding (runs on the audio thread via _AudioFeedWorker._tick) ─────────
+    # feeding (runs on the audio thread via _AudioFeedWorker._tick)
     def _feed_once(self, sink: QAudioSink, io):
         free = sink.bytesFree()
         if free < _FRAME_BYTES:
@@ -575,7 +575,7 @@ class DspEngine(QObject):
         np.clip(out, -1.0, 1.0, out=out)
         io.write(out.astype(np.float32, copy=False).tobytes())
 
-    # ── transport ─────────────────────────────────────────────────────────────
+    # transport
     def play(self):
         self._playing = True
         if self._sink_alive and self._sink_suspended:
@@ -647,7 +647,7 @@ class DspEngine(QObject):
             self._stop_sink()   # paused/stopped → play() starts fresh from cursor
         self._emit_pos()
 
-    # ── properties ────────────────────────────────────────────────────────────
+    # properties
     @property
     def is_playing(self) -> bool:
         return self._playing
@@ -704,7 +704,7 @@ class DspEngine(QObject):
             return ((seg[:, 0].astype(np.float32) + seg[:, 1].astype(np.float32))
                      * np.float32(0.5 / 32768.0))
 
-    # ── gapless: preload the next track ─────────────────────────────────────────
+    # gapless: preload the next track
     def clear_next(self):
         self._next_gen += 1
         self._next_path = None
@@ -796,7 +796,7 @@ class DspEngine(QObject):
         self.advanced.emit(idx)
         return True
 
-    # ── crossfade (overlapping tail of A with head of B) ────────────────────────
+    # crossfade (overlapping tail of A with head of B)
     def _start_crossfade(self):
         nx = self._next
         if not nx:

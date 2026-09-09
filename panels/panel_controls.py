@@ -279,7 +279,7 @@ class ControlsWidget(QWidget):
     def set_waveform_on(self, on: bool):
         self._wf_btn.setChecked(on)
 
-    # ── Enhance DSP wand state (persisted across sessions) ─────────────────────
+    # Enhance DSP wand state (persisted across sessions)
     @property
     def enhance_on(self) -> bool:
         return self._wand.isChecked()
@@ -324,7 +324,7 @@ class ControlsWidget(QWidget):
         self._cur_path = track.path
         self._subsong_row.setVisible(False)   # re-shown by _on_subsong_changed for multi-tune files
 
-    # ── subsongs ─────────────────────────────────────────────────────────────────
+    # subsongs
     def _wave_key(self, path) -> str:
         """Cache key for the waveform: per-subsong when the file has subsongs."""
         n = self._player.subsong_count

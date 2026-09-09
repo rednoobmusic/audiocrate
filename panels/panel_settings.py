@@ -354,7 +354,7 @@ class SettingsWidget(QWidget):
             lbl.setWordWrap(True)
             form.addRow("", lbl)
 
-        # ── Theme ──────────────────────────────────────────────────────────
+        # Theme
         header("Theme", top_gap=False)
         self._system_theme_chk = QCheckBox("Use system style and colours")
         self._system_theme_chk.setChecked(self._cfg.get("system_theme", True))
@@ -369,7 +369,7 @@ class SettingsWidget(QWidget):
         form.addRow("", self._art_color_chk)
         hint("Falls back to the colours below when no art is available.")
 
-        # ── Colours ────────────────────────────────────────────────────────
+        # Colours
         header("Colours")
         hint("Used by AudioCrate's own theme (when “Use system style” is off).")
         form.addRow("Accent",     self._color_row("accent_color", "Accent colour"))
@@ -382,7 +382,7 @@ class SettingsWidget(QWidget):
         self._shade_sl.sliderReleased.connect(self._apply_theme_style)
         form.addRow("Frame shading", _row(self._shade_sl, self._shade_lbl))
 
-        # ── Text & size ────────────────────────────────────────────────────
+        # Text & size
         header("Text & size")
         self._font_combo = QFontComboBox()
         self._font_combo.blockSignals(True)
@@ -409,7 +409,7 @@ class SettingsWidget(QWidget):
 
         return self._scroll_wrap(w)
 
-    # ── colour pickers (accent / background / text) ────────────────────────────
+    # colour pickers (accent / background / text)
     def _color_row(self, key: str, dialog_title: str, auto: bool = False):
         """A swatch button + reset, wired to cfg[key]. auto → empty value means
         'derive automatically' and the reset button restores that."""

@@ -120,7 +120,7 @@ class OscilloscopeWidget(QWidget):
         self._tick_timer.timeout.connect(self._tick)
         # Only runs while actually visible + focused (see _sync_timer / showEvent).
 
-    # ── run only when visible & focused (perf) ──────────────────────────────────
+    # run only when visible & focused (perf)
 
     def set_suspended(self, suspended: bool):
         self._suspended = bool(suspended)
@@ -142,7 +142,7 @@ class OscilloscopeWidget(QWidget):
         super().hideEvent(e)
         self._sync_timer()
 
-    # ── accent colour ──────────────────────────────────────────────────────────
+    # accent colour
 
     def set_accent(self, palette: dict | None):
         if palette:
@@ -171,7 +171,7 @@ class OscilloscopeWidget(QWidget):
                 return c
         return QColor(self._default_accent)
 
-    # ── capture ─────────────────────────────────────────────────────────────────
+    # capture
 
     def _decay(self):
         if len(self._wave):
@@ -258,7 +258,7 @@ class OscilloscopeWidget(QWidget):
         self._wave = disp
         self.update()
 
-    # ── render ───────────────────────────────────────────────────────────────────
+    # render
 
     def paintEvent(self, _):
         W, H = self.width(), self.height()
@@ -292,7 +292,7 @@ class OscilloscopeWidget(QWidget):
         p.drawPolyline(poly)
         p.end()
 
-    # ── config ─────────────────────────────────────────────────────────────────
+    # config
 
     def apply_config(self, d: dict):
         if "window_ms"  in d: self._cfg.window_ms  = d["window_ms"]
