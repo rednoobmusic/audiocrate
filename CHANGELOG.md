@@ -1,4 +1,4 @@
-# AudioCrate Changelog
+# AudioCrate changelog
 
 ## Unreleased
 
@@ -88,7 +88,7 @@
 ## 1.3.0 (2026-07-29)
 
 ### Added
-- **Massive format expansion**: 249 extensions (190 audio, 59 video), including
+- Format support expanded to 249 extensions (190 audio, 59 video), including
   VLC-parity aliases `.a52 .adt .adts .amb .mpga .qcp .xa`. Everything ffmpeg
   can demux: WavPack, Musepack, TTA, TAK, DSD (DSF/DFF), AC3/E-AC3/DTS/TrueHD/MLP, ALAC,
   Opus/Speex, QOA, plus dozens of game-console and broadcast formats, and all
@@ -110,7 +110,7 @@
   the normal engine, instead of starting on the native player and switching
   over a moment later, which is why Enhance audibly "kicked in" late.
 - Playback position and duration for `.fur` are now accurate and seekable.
-- **Oscilloscope frame pacing**: the render timer used Qt's coarse timer, which
+- Oscilloscope frame pacing was uneven. The render timer used Qt's coarse timer, which
   batched wakeups and made the trace visibly speed up and slow down. Both the
   scope and the spectrum analyzer now use precise timers.
 - A saved oscilloscope frame rate is applied at startup.

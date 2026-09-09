@@ -8,36 +8,47 @@ Built with Python + PySide6 (Qt 6). Linux only. Windows and macOS are untested.
 
 ## Features
 
-**Formats.** 240+ extensions. Everything ffmpeg can decode (MP3, FLAC, Opus,
-ALAC/M4A, WavPack, Musepack, Monkey's Audio, TTA, TAK, DSD, AC3/DTS/TrueHD,
-plus dozens of game-console and broadcast formats), all common video containers,
-and the chiptune set below.
+### Formats
 
-**Chiptunes.** Furnace `.fur` (via libfurnace, streamed so it starts in
-milliseconds), Commodore 64 SID (via libsidplayfp), VGM/VGZ, NSF/NSFe, SPC,
-GBS, AY, GYM, HES, KSS, SAP (via libgme), tracker modules MOD/XM/IT/S3M and
-friends (via openmpt123), and ZX/AY native formats (via zxtune123).
-Multi-subsong navigation for the formats that have it, with prev/next and a
-direct picker.
+240+ extensions. Everything ffmpeg can decode (MP3, FLAC, Opus, ALAC/M4A,
+WavPack, Musepack, Monkey's Audio, TTA, TAK, DSD, AC3/DTS/TrueHD, plus dozens
+of game-console and broadcast formats), all common video containers, and the
+chiptune set below.
 
-**Chiptune lengths.** SID files carry no duration at all, and many chip formats
-lie about it. Every tune is measured before it plays, so the seek bar is right
-from the first frame: an HVSC songlength database is used when available,
-otherwise the length is detected from the rendered audio by finding where the
-tune stops or starts repeating.
+### Chiptunes
 
-**Playback.** Gapless, crossfade, ReplayGain-aware normalization, silence trim,
-and a live "Enhance" DSP chain (multiband EQ, exciters, stereo widening, safety
-limiter) that toggles instantly without re-decoding. Audio runs on a dedicated
-thread, so UI activity never interrupts sound.
+Furnace `.fur` (via libfurnace, streamed so it starts in milliseconds),
+Commodore 64 SID (via libsidplayfp), VGM/VGZ, NSF/NSFe, SPC, GBS, AY, GYM, HES,
+KSS, SAP (via libgme), tracker modules MOD/XM/IT/S3M and friends (via
+openmpt123), and ZX/AY native formats (via zxtune123). Multi-subsong navigation
+for the formats that have it, with prev/next and a direct picker.
 
-**Visuals.** Spectrum analyzer, oscilloscope with zero-crossing trigger and
-configurable frame rate, Milkdrop/projectM visualizer, waveform seek bar, and
-optional album-art color theming for the whole UI.
+### Chiptune lengths
 
-**Library & extras.** Folder library with tag search, playlists with undo and
-drag reordering, synced lyrics (LRCLIB), MPRIS media keys, Discord Rich
-Presence, Last.fm scrobbling, play statistics, sleep timer.
+SID files carry no duration at all, and many chip formats lie about it. Every
+tune is measured before it plays, so the seek bar is right from the first
+frame: an HVSC songlength database is used when available, otherwise the length
+is detected from the rendered audio by finding where the tune stops or starts
+repeating.
+
+### Playback
+
+Gapless, crossfade, ReplayGain-aware normalization, silence trim, and a live
+"Enhance" DSP chain (multiband EQ, exciters, stereo widening, safety limiter)
+that toggles instantly without re-decoding. Audio runs on a dedicated thread,
+so UI activity never interrupts sound.
+
+### Visuals
+
+Spectrum analyzer, oscilloscope with zero-crossing trigger and configurable
+frame rate, Milkdrop/projectM visualizer, waveform seek bar, and optional
+album-art color theming for the whole UI.
+
+### Library and extras
+
+Folder library with tag search, playlists with undo and drag reordering, synced
+lyrics (LRCLIB), MPRIS media keys, Discord Rich Presence, Last.fm scrobbling,
+play statistics, sleep timer.
 
 ## Install (Linux)
 
