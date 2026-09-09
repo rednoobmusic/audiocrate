@@ -8,28 +8,47 @@ the application has not set it itself, and Qt Multimedia never sets it. Per-app
 volume is remembered against that name too, so the level you leave AudioCrate
 at is inherited by the next Python program that plays anything.
 
-Two channels have to be told, because Qt can reach the server either way:
+Two channels are set, because which one is live depends on the Qt build:
 
+    PIPEWIRE_PROPS       read by pw_stream_connect() in this process
+                         (pipewire src/pipewire/stream.c). Live whenever Qt
+                         uses its native PipeWire audio sink, which exists from
+                         Qt 6.10 and is preferred over libpulse when the server
+                         announces itself as PipeWire. On such a system this is
+                         the channel that does the work, and it is applied
+                         after Qt's own properties and after stream.rules, so
+                         it wins.
     PULSE_PROP_OVERRIDE  read by libpulse in pa_init_proplist() and applied
-                         with PA_UPDATE_REPLACE, so it wins whatever else sets
-                         the same key. This is the path that matters in
-                         practice: Qt Multimedia uses its PulseAudio backend on
-                         Linux, talking either to real PulseAudio or to
-                         pipewire-pulse.
-    PIPEWIRE_PROPS       merged into the property dict of every stream by
-                         pw_stream_new(), covering a native libpipewire path.
+                         with PA_UPDATE_REPLACE. Only reached when Qt falls
+                         back to QPulseAudioSink, which is every Qt before 6.10
+                         and any build without the pipewire feature. Inert
+                         otherwise, since libpulse never builds a context.
 
-The two strings are built separately rather than shared because the conventions
-differ: PulseAudio quotes values and spells keys with underscores, PipeWire
-takes them bare and hyphenated.
+Verified live rather than assumed: `application.version` appears on the stream,
+and no Qt backend and no libpulse code path ever writes it. Only PIPEWIRE_PROPS
+can put it there.
 
-Deliberately absent from both: `media.role`. Setting it looks right for a music
-player, but PulseAudio's stream-restore keys saved volume on the role before it
-looks at the application, so every app tagged `music`, Chromium included, would
-share one remembered volume with us. Leaving it off keys volume on
-`application.id` instead, which is the whole point of naming ourselves. A
-routing rule that wants this app can match `application.id = audiocrate`, which
-is more specific than a role anyway.
+The two strings are built separately because the conventions differ. PulseAudio
+quotes values and spells keys with underscores. PipeWire takes them bare, and
+spells the icon key with a hyphen (PW_KEY_APP_ICON_NAME is
+"application.icon-name"), which pipewire-pulse remaps to the underscore form on
+the way out to pulse clients. That is why pactl shows an underscore for a key
+set here with a hyphen.
+
+Do not remove `application.id`. WirePlumber keys saved volume on it:
+`Output/Audio:application.id:audiocrate` in
+~/.local/state/wireplumber/stream-properties. Rename it and every saved level
+is orphaned silently, since a missing entry falls back to a default rather than
+erroring.
+
+`media.role` is deliberately not set here, but not because it would do harm.
+Qt's PipeWire sink sets it to "Music" on every stream it opens, so leaving it
+out of the environment does not remove it. It also does not affect volume
+restore: WirePlumber's formKey() only takes the media.role branch for the exact
+string "Notification", and otherwise uses application.id. The
+`module-stream-restore.id = sink-input-by-media-role:music` that pactl reports
+is manufactured by pipewire-pulse at serialization time for any playback node
+and is never read by WirePlumber.
 
 Both variables are read when the client library initialises, on the first
 QAudioSink/QAudioOutput, so apply() has to run before PySide6.QtMultimedia is
@@ -65,14 +84,20 @@ _PULSE_PROPS = " ".join((
     f"application.process.binary='{APP_ID}'",
 ))
 
-# Bare values, hyphen spelling. PipeWire's conventions.
-# No icon key here: PipeWire documents `media.icon-name` for media objects but
-# nothing equivalent for applications, and pipewire-pulse already carries the
-# PulseAudio one above, which is the path Qt actually takes.
+# Bare values, hyphen spelling. PipeWire's conventions. This is the live channel
+# on a Qt 6.10+ PipeWire build, so everything the mixer reads has to be here and
+# not only in the PulseAudio string above.
 _PIPEWIRE_PROPS = " ".join((
     f"application.name={APP_NAME}",
-    f"application.id={APP_ID}",
+    f"application.id={APP_ID}",          # WirePlumber's volume-restore key
     f"application.version={VERSION}",
+    # Hyphen, per PW_KEY_APP_ICON_NAME. pipewire-pulse remaps it to the
+    # underscore form for pulse clients, so pactl shows application.icon_name.
+    # Setting the underscore form here would pass through unremapped and be
+    # invisible to anything reading the native graph.
+    f"application.icon-name={APP_ID}",
+    # PipeWire fills this from the process name (python3.x) only when absent.
+    f"application.process.binary={APP_ID}",
 ))
 
 _applied = False
@@ -146,10 +171,19 @@ if __name__ == "__main__":      # self-check: python3 core/audio_identity.py
     assert _props["application.name"] == APP_NAME, _props
     assert _props["application.id"] == APP_ID, _props
     assert _props["application.icon_name"] == APP_ID, _props
-    # media.role must stay off: stream-restore keys saved volume on the role
-    # ahead of the application, so setting it shares our volume with every other
-    # app tagged the same way. See the module docstring.
+    # Qt sets media.role itself, so ours would be redundant rather than wrong.
+    # See the module docstring for why omitting it changes nothing either way.
     assert "media.role" not in _props, _props
+
+    # The PipeWire string is the live channel on a Qt 6.10+ build, so the keys a
+    # mixer reads have to be present there and not only in the PulseAudio one.
+    _pw = os.environ["PIPEWIRE_PROPS"]
+    for _k in ("application.name", "application.id", "application.version",
+               "application.icon-name", "application.process.binary"):
+        assert f"{_k}={APP_ID}" in _pw or f"{_k}=" in _pw, (_k, _pw)
+    # Hyphen only. The underscore spelling is the pulse wire format and would
+    # pass through the native graph unremapped.
+    assert "application.icon_name" not in _pw, _pw
     assert "python" not in os.environ["PULSE_PROP_OVERRIDE"].lower()
     assert os.environ["RESOURCE_NAME"] == APP_ID
 

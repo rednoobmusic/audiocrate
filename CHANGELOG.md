@@ -25,12 +25,15 @@
 - **AudioCrate now appears as itself in your volume mixer**, with its own name,
   icon and version, instead of an anonymous "python3". This affects pavucontrol,
   helvum, and the GNOME and KDE volume panels, on both PipeWire and PulseAudio.
-  Two consequences beyond the label: your saved volume for AudioCrate is now
-  kept against AudioCrate alone — not against the Python interpreter, and not
-  shared with every other application that happens to call itself a music player
-  — and the five output paths (video, DSP engine, Furnace, VGM, SID) are all
-  identified, where each used to show up as its own nameless entry. A routing
-  rule that wants this app specifically can match `application.id = audiocrate`.
+  Two consequences beyond the label. Your saved volume for AudioCrate is now
+  kept against AudioCrate rather than against the Python interpreter, because
+  WirePlumber keys it on `application.id`. And the five output paths (video, DSP
+  engine, Furnace, VGM, SID) are all identified, where each used to show up as
+  its own nameless entry. A routing rule that wants this app specifically can
+  match `application.id = audiocrate`.
+- **The mixer entry now carries the AudioCrate icon**, and reports `audiocrate`
+  rather than `python3.14` as the process. Both keys were only ever set for the
+  PulseAudio path, which turns out not to be the one in use.
 - The app is properly associated with `audiocrate.desktop`, so Wayland
   compositors and XDG portals find its icon and name rather than a generic one.
 - On X11, the WM_CLASS instance name is `audiocrate` instead of `python3`.
