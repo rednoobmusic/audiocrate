@@ -27,6 +27,22 @@ _lock = threading.Lock()
 _DEFAULT_ACCENT = "#8040c8"   # matches theme.py accent
 
 
+_FRAC_EPS = 1e-6
+_STALL_LIMIT = 25          # polls at 120 ms, so about 3 s without progress
+
+
+def _engine_stalled(frac: float, last: float, strikes: int,
+                    limit: int = _STALL_LIMIT) -> bool:
+    """True once the engine's decode fraction has stopped advancing.
+
+    A partial buffer that never grows means the engine is not decoding this
+    track at all, usually because it belongs to the track before this one. The
+    caller polls forever on that shape unless it gives up, and the drawn wave
+    stays blank past the point the old decode reached.
+    """
+    return frac < 0.999 and frac <= last + _FRAC_EPS and strikes >= limit
+
+
 def _compute_waveform(path: Path, n: int) -> np.ndarray:
     from ffmpeg_util import ffmpeg_path
     proc = subprocess.run(
@@ -146,6 +162,8 @@ class WaveformBar(QWidget):
         self._engine_key = ""
         self._engine_path = None
         self._engine_tries = 0
+        self._engine_frac = -1.0
+        self._engine_stall = 0
         self._engine_poll = QTimer(self)
         self._engine_poll.setInterval(120)
         self._engine_poll.timeout.connect(self._poll_engine)
@@ -182,6 +200,8 @@ class WaveformBar(QWidget):
             self._engine_key = key
             self._engine_path = path
             self._engine_tries = 0
+            self._engine_frac = -1.0
+            self._engine_stall = 0
             self._engine_poll.start()
             self._poll_engine()            # draw whatever is already decoded
             return
@@ -210,6 +230,19 @@ class WaveformBar(QWidget):
         self._waveform = pts
         self._px_wave = None
         self.update()
+        if frac > self._engine_frac + _FRAC_EPS:
+            self._engine_frac = frac
+            self._engine_stall = 0
+        else:
+            self._engine_stall += 1
+        if _engine_stalled(frac, self._engine_frac, self._engine_stall):
+            # The buffer is not growing, so this track is not going through the
+            # engine. Decode the file instead of polling someone else's audio.
+            self._engine_poll.stop()
+            self._engine = None
+            p, k = self._engine_path, self._engine_key
+            threading.Thread(target=self._bg_load, args=(p, k), daemon=True).start()
+            return False
         if frac >= 0.999:
             self._engine_poll.stop()
             with _lock:                    # complete shape is worth caching

@@ -300,7 +300,11 @@ class ControlsWidget(QWidget):
         if ext not in _skip:
             # Plain audio streams through the DSP engine, so read the shape from
             # its decode buffer rather than decoding the file a second time.
-            eng = getattr(self._player, "_dsp", None)
+            # Video is the exception. It plays through QMediaPlayer, so the engine
+            # still holds whatever audio track ran before it, and binning that
+            # draws another track's shape and never completes.
+            from player import VIDEO_EXTS
+            eng = None if ext in VIDEO_EXTS else getattr(self._player, "_dsp", None)
             self._wf.load(track.path, engine=eng, key=self._wave_key(track.path))
 
     def _on_shuffle_toggle(self, on: bool):

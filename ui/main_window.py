@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
             if key in _palette_cache:
                 palette = _palette_cache[key]
                 if _qt_valid(self):
-                    self._palette_ready.emit(palette)
+                    self._palette_ready.emit((path, palette))
                 return
         data = extract_art(path)
         palette = None
@@ -675,7 +675,7 @@ class MainWindow(QMainWindow):
         with _cache_lock:
             _palette_cache[key] = palette
         if _qt_valid(self):
-            self._palette_ready.emit(palette)
+            self._palette_ready.emit((path, palette))
 
     def _make_qss(self, palette=None) -> str:
         s = self._settings
@@ -706,8 +706,15 @@ class MainWindow(QMainWindow):
                 return _palette_cache.get(str(self._player.current.path))
         return None
 
-    def _apply_art_palette(self, palette):
+    def _apply_art_palette(self, payload):
         if not _qt_valid(self):
+            return
+        # One fetch thread per track change, so a slow one can land after the
+        # user has moved on. Without this a video, whose art read fails fast and
+        # returns nothing, keeps the previous track's colours.
+        path, palette = payload
+        cur = self._player.current
+        if cur is None or str(cur.path) != str(path):
             return
         # Re-polishing every widget is the most expensive thing a track change
         # does — skip it when the palette didn't actually change (same album).
