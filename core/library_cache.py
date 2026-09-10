@@ -36,22 +36,51 @@ def _db() -> sqlite3.Connection:
     return _conn
 
 
+def _first(f, key: str, default: str = "") -> str:
+    """One tag value, or the default. Never raises.
+
+    Each key is read on its own so that a container which objects to one of
+    them still gives up the rest, and still gives up its duration. All four used
+    to sit under a single try, so a single awkward key lost the lot.
+    """
+    try:
+        v = f.get(key)
+    except Exception:
+        return default
+    if not v:
+        return default
+    try:
+        return str(v[0]) or default
+    except Exception:
+        return default
+
+
 def _read_tags(path: Path) -> dict:
     """Read tags straight from the file (the slow path)."""
     title, artist, album, duration = path.stem, "", "", 0.0
     try:
         from mutagen import File as MFile
         f = MFile(str(path), easy=True)
-        if f is not None:
-            if f.tags:
-                title  = str((f.get("title")  or [path.stem])[0])
-                artist = str((f.get("artist") or [""])[0])
-                album  = str((f.get("album")  or [""])[0])
+    except Exception:
+        f = None
+
+    if f is not None:
+        # Read straight off it, with no "if f.tags" in front. The info panel
+        # reads these same files that way and shows tags this did not, because
+        # a container can answer for a key while its tags object still looks
+        # empty, and the guard threw the whole read away when it did. A FLAC
+        # landed here with nothing but its filename, which is why everything
+        # ended up crammed in the title column.
+        title  = _first(f, "title", path.stem)
+        artist = _first(f, "artist")
+        album  = _first(f, "album")
+        try:
             info = getattr(f, "info", None)
             if info is not None and getattr(info, "length", None):
                 duration = float(info.length)
-    except Exception:
-        pass
+        except Exception:
+            pass
+
     if duration <= 0.0:
         # mutagen only knows the containers it was written for, which is a small
         # part of what this plays, and a track with no length shows an empty

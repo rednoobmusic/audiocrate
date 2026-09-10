@@ -183,6 +183,7 @@ class _PlaylistTab(QTreeWidget):
         self._tracks:  list[Path]       = []    # visible order
         self._manual:  list[Path]       = []    # dragged order, the one that saves
         self._history: list[tuple[list[Path], list[Path]]] = []
+        self._pending_columns = ""   # layout waiting for a width to go into
         self.itemDoubleClicked.connect(
             lambda item, _c=0: self.play_requested.emit(self.indexOfTopLevelItem(item))
         )
@@ -260,19 +261,46 @@ class _PlaylistTab(QTreeWidget):
     # column layout
 
     def header_state(self) -> str:
-        """Widths, order and the sort indicator, as text a JSON file can hold."""
+        """Widths, order and the sort indicator, as text a JSON file can hold.
+
+        While a layout is still waiting to go on, that layout is the answer
+        rather than whatever the header currently holds. Reading the header
+        before the widget has a width gives back what Qt clamped the columns to
+        in order to fit nothing, and writing that to the session is what made
+        them come back smaller every run.
+        """
+        if self._pending_columns or self.viewport().width() <= 1:
+            return self._pending_columns
         return bytes(self.header().saveState().toBase64()).decode("ascii")
 
     def restore_header_state(self, blob: str) -> bool:
-        """Put back a layout saved earlier. A blob from an older column set is
-        rejected by Qt rather than applied badly, so a False here is fine."""
-        if not blob:
+        """Hold a saved layout, and put it on once there is room for it."""
+        self._pending_columns = blob or ""
+        return self._apply_header_state()
+
+    def _apply_header_state(self) -> bool:
+        """Apply the held layout, if the widget is wide enough to take it.
+
+        restoreState squeezes every column into whatever width the viewport has,
+        and a tab that is not in its tab widget yet has none. The tabs are built
+        and filled before being added, so this waits for the first show instead.
+        """
+        blob = self._pending_columns
+        if not blob or self.viewport().width() <= 1:
             return False
         try:
-            return self.header().restoreState(
-                QByteArray.fromBase64(blob.encode("ascii")))
+            ok = bool(self.header().restoreState(
+                QByteArray.fromBase64(blob.encode("ascii"))))
         except Exception:
-            return False
+            ok = False
+        if ok:
+            self._pending_columns = ""
+        return ok
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # first show is the first time the header has a width to restore into
+        self._apply_header_state()
 
     # sorting
 
@@ -684,8 +712,8 @@ class PlaylistPanel(QWidget):
         lst.notify.connect(self.notify)
         # a new tab takes the column layout the others are already using
         cur = self._current_list()
-        lst.restore_header_state(cur.header_state() if cur is not None
-                                 else self._columns)
+        lst.restore_header_state((cur.header_state() if cur is not None else "")
+                                 or self._columns)
         lst.setContextMenuPolicy(Qt.CustomContextMenu)
         lst.customContextMenuRequested.connect(lambda pos, l=lst: self._ctx_menu(pos, l))
         return lst
@@ -771,7 +799,7 @@ class PlaylistPanel(QWidget):
         if cur is None:
             cur = next((self._tabs.widget(i) for i in range(self._tabs.count())
                         if isinstance(self._tabs.widget(i), _PlaylistTab)), None)
-        columns = cur.header_state() if cur is not None else self._columns
+        columns = (cur.header_state() if cur is not None else "") or self._columns
         _SESSION.write_text(
             json.dumps({"tabs": data, "columns": columns}, indent=2),
             encoding="utf-8")
