@@ -123,9 +123,11 @@ class Shine(QWidget):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
+        # No WA_TranslucentBackground here. It is meant for top level windows,
+        # and on a child it can force a native window of its own, which is the
+        # same thing that crashed when an effect met the GL visualizer.
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WA_NoSystemBackground)
-        self.setAttribute(Qt.WA_TranslucentBackground)
         self._pos = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(16)
@@ -184,9 +186,11 @@ class CursorParticles(QWidget):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
+        # No WA_TranslucentBackground here. It is meant for top level windows,
+        # and on a child it can force a native window of its own, which is the
+        # same thing that crashed when an effect met the GL visualizer.
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WA_NoSystemBackground)
-        self.setAttribute(Qt.WA_TranslucentBackground)
         self._parts: list[list[float]] = []      # x, y, vx, vy, life, decay, size
         self._last = QPointF(-1.0, -1.0)
         self._colour = QColor(255, 255, 255)
