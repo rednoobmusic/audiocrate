@@ -11,6 +11,14 @@ import audio_identity
 
 audio_identity.apply()
 
+# After audio_identity, because that has to run before any Qt audio class
+# exists, and before everything else, so a crash on the way up still leaves a
+# trace. faulthandler turns a bare "Segmentation fault" into the Python stack
+# of every thread, written to the terminal and to ~/.config/audiocrate/crash.log.
+import logs  # noqa: E402
+
+logs.setup()
+
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from PySide6.QtCore import Qt, QTimer  # noqa: E402
 from main_window import MainWindow  # noqa: E402
