@@ -726,6 +726,10 @@ class MainWindow(QMainWindow):
         self._osc.set_accent(palette)
         self._controls._wf.set_accent(palette)
         self._eq_panel.set_accent(palette)
+        # built later than this handler is connected, so it may not exist yet
+        np = getattr(self, "_np_widget", None)
+        if np is not None:
+            np.set_accent(palette)
 
     def _refresh_idle_accents(self):
         """Visualizers/waveform follow the OS highlight only on a *pure* system
@@ -1032,6 +1036,9 @@ class MainWindow(QMainWindow):
             self._osc.set_accent(None)
             self._controls._wf.set_accent(None)
             self._eq_panel.set_accent(None)
+            np = getattr(self, "_np_widget", None)
+            if np is not None:
+                np.set_accent(None)
             # Revert to system theme or dark theme depending on current setting
             if self._system_theme:
                 QApplication.instance().setStyle("")
