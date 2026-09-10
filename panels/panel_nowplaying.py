@@ -1,5 +1,7 @@
 from __future__ import annotations
+import math
 import threading
+from functools import lru_cache
 from pathlib import Path
 
 try:
@@ -11,7 +13,7 @@ except ImportError:
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QMenu, QStackedWidget
 from PySide6.QtCore    import Qt, Signal, QTimer, QPointF
 from PySide6.QtGui     import (QPixmap, QPainter, QPainterPath, QColor, QMouseEvent,
-                               QRadialGradient)
+                               QRadialGradient, QTransform)
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
 from player import Player, extract_art, VIDEO_EXTS
@@ -30,6 +32,74 @@ _ART_LEAN_X   = 8.0       # the site's depth translate, cx * 8 and cy * 6
 _ART_LEAN_Y   = 6.0
 _ART_SCALE    = 1.04
 _ART_GLOW_R   = 180.0     # matches the 180px circle the stylesheet paints
+# The site tilts as well as leans: perspective(400px) rotateX(-cy*9) rotateY(cx*12).
+_ART_TILT_X   = 9.0       # degrees at the top and bottom edges
+_ART_TILT_Y   = 12.0      # degrees at the left and right edges
+_ART_PERSP    = 400.0     # the same 400px perspective the stylesheet sets
+# ...but 400px is a viewing distance, and the site applies it to windows a few
+# hundred pixels across. Left fixed, the same tilt throws a corner half again as
+# far on a large panel as on a small one, and the art has to shrink by a third
+# to stay inside. Holding the distance proportional to the art keeps the tilt
+# looking the same at every size, which is what a fixed perspective on a fixed
+# size layout was already doing.
+_ART_PERSP_MIN = 1.5      # multiples of the art's own width
+
+
+def _perspective(side: float) -> float:
+    return max(_ART_PERSP, side * _ART_PERSP_MIN)
+
+
+def _hover_extent(side: float, w: float, h: float) -> float:
+    """How far past the widget the art reaches at its worst hover position.
+
+    Negative means it stays inside. Every extreme of the lean and tilt is tried
+    against all four corners, because the worst case is a corner: there both
+    rotations push the perspective divisor the same way and magnify together,
+    which is what a single axis estimate keeps missing.
+    """
+    if side <= 0:
+        return -1.0
+    x, y = (w - side) / 2.0, (h - side) / 2.0
+    worst = -1e9
+    for cx in (-0.5, 0.5):
+        for cy in (-0.5, 0.5):
+            ox, oy = cx * _ART_LEAN_X, cy * _ART_LEAN_Y
+            rx = math.radians(-cy * 2.0 * _ART_TILT_X)
+            ry = math.radians(cx * 2.0 * _ART_TILT_Y)
+            d = _perspective(side)
+            sx, sy = math.sin(ry) / d, -math.sin(rx) / d
+            cxr, cyr = math.cos(ry), math.cos(rx)
+            for px, py in ((x, y), (x + side, y), (x, y + side), (x + side, y + side)):
+                bx, by = px - w / 2.0, py - h / 2.0
+                denom = 1.0 + bx * sx + by * sy
+                if denom <= 0.05:          # past the vanishing point, unusable
+                    return 1e9
+                fx = bx * cxr / denom * _ART_SCALE + w / 2.0 + ox
+                fy = by * cyr / denom * _ART_SCALE + h / 2.0 + oy
+                worst = max(worst, -fx, fx - w, -fy, fy - h)
+    return worst
+
+
+@lru_cache(maxsize=32)
+def _art_side(w: int, h: int) -> int:
+    """The largest art that still fits once the hover has had its way with it.
+
+    Solved rather than derived. Two attempts at a closed form both came out too
+    generous, because the tilt magnifies by a factor that depends on the size
+    being solved for, so a bisection on the real transform is used instead. It
+    runs once per widget size and the result is cached, which is nothing next to
+    the repaint it feeds.
+    """
+    lo, hi = 0.0, float(min(w, h))
+    if hi <= 0:
+        return 0
+    for _ in range(24):
+        mid = (lo + hi) / 2.0
+        if _hover_extent(mid, w, h) <= 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return int(lo)
 
 
 def _approach(cur: float, target: float, rate: float) -> float:
@@ -122,6 +192,10 @@ class _ArtLabel(QLabel):
         self._scale  = 1.0
         self._t_off_x = 0.0
         self._t_off_y = 0.0
+        self._tilt_x = 0.0        # degrees, about the horizontal axis
+        self._tilt_y = 0.0
+        self._t_tilt_x = 0.0
+        self._t_tilt_y = 0.0
         self.setMouseTracking(True)
         self._anim = QTimer(self)
         self._anim.setInterval(_ART_TICK_MS)
@@ -153,6 +227,7 @@ class _ArtLabel(QLabel):
     def leaveEvent(self, e):
         self._over_art = False
         self._t_off_x = self._t_off_y = 0.0
+        self._t_tilt_x = self._t_tilt_y = 0.0
         self._anim.start()
         super().leaveEvent(e)
 
@@ -172,8 +247,12 @@ class _ArtLabel(QLabel):
             cy = (pos.y() - y) / h - 0.5
             self._t_off_x = cx * _ART_LEAN_X
             self._t_off_y = cy * _ART_LEAN_Y
+            # rotateX takes -cy so the top edge falls away as the pointer rises
+            self._t_tilt_x = -cy * 2.0 * _ART_TILT_X
+            self._t_tilt_y = cx * 2.0 * _ART_TILT_Y
         else:
             self._t_off_x = self._t_off_y = 0.0
+            self._t_tilt_x = self._t_tilt_y = 0.0
         if not self._anim.isActive():
             self._anim.start()
         self.update()          # the glow follows the pointer with no easing
@@ -186,8 +265,11 @@ class _ArtLabel(QLabel):
         self._scale = _approach(self._scale, _ART_SCALE if live else 1.0, rate)
         self._off_x = _approach(self._off_x, self._t_off_x, rate)
         self._off_y = _approach(self._off_y, self._t_off_y, rate)
+        self._tilt_x = _approach(self._tilt_x, self._t_tilt_x, rate)
+        self._tilt_y = _approach(self._tilt_y, self._t_tilt_y, rate)
         if not live and self._glow == 0.0 and self._off_x == 0.0 \
-                and self._off_y == 0.0 and self._scale == 1.0:
+                and self._off_y == 0.0 and self._scale == 1.0 \
+                and self._tilt_x == 0.0 and self._tilt_y == 0.0:
             self._anim.stop()   # fully back at rest, nothing left to repaint for
         self.update()
 
@@ -199,7 +281,7 @@ class _ArtLabel(QLabel):
         again, since it keeps its aspect.
         """
         W, H = self.width(), self.height()
-        side = min(W, H) - 16
+        side = _art_side(W, H)
         if side <= 0:
             return 0, 0, 0, 0
         if self._scaled is not None and not self._scaled.isNull():
@@ -217,15 +299,18 @@ class _ArtLabel(QLabel):
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(0, 0, W, H, self.palette().base())
 
-        # Lean and zoom about the middle of the widget, so the art moves as one
-        # piece rather than sliding out of its own frame.
-        if self._off_x or self._off_y or self._scale != 1.0:
+        # Lean, zoom and tilt about the middle of the widget, so the art moves
+        # as one piece rather than sliding out of its own frame.
+        if (self._off_x or self._off_y or self._scale != 1.0
+                or self._tilt_x or self._tilt_y):
             p.translate(W / 2.0 + self._off_x, H / 2.0 + self._off_y)
             p.scale(self._scale, self._scale)
+            if self._tilt_x or self._tilt_y:
+                p.setTransform(self._tilt(), True)
             p.translate(-W / 2.0, -H / 2.0)
 
         if self._pm and not self._pm.isNull():
-            side = min(W, H) - 16
+            side = _art_side(W, H)
             if self._scaled_key != side or self._scaled is None:
                 self._scaled = self._pm.scaled(side, side, Qt.KeepAspectRatio,
                                                Qt.SmoothTransformation)
@@ -245,7 +330,7 @@ class _ArtLabel(QLabel):
             p.drawRoundedRect(x, y, scaled.width(), scaled.height(), 12, 12)
         else:
             pal  = self.palette()
-            side = min(W, H) - 16
+            side = _art_side(W, H)
             x    = (W - side) // 2
             y    = (H - side) // 2
             p.setBrush(pal.mid())
@@ -263,6 +348,22 @@ class _ArtLabel(QLabel):
             p.setClipping(False)
 
         p.end()
+
+    def _tilt(self) -> QTransform:
+        """A rotateX and rotateY under perspective, as a projective transform.
+
+        CSS perspective divides a point by 1 + z/d after rotating it, and that
+        division is what the bottom row of a 3x3 transform does. Rotating about
+        the vertical axis sends x to x*cos(ry) and z to x*sin(ry), so the pair
+        lands in m11 and m13, and the horizontal axis fills m22 and m23 the same
+        way. Qt then has a real tilt rather than a squash pretending to be one.
+        """
+        rx = math.radians(self._tilt_x)
+        ry = math.radians(self._tilt_y)
+        d = _perspective(_art_side(self.width(), self.height()))
+        return QTransform(math.cos(ry), 0.0, math.sin(ry) / d,
+                          0.0, math.cos(rx), -math.sin(rx) / d,
+                          0.0, 0.0, 1.0)
 
     def _paint_glow(self, p: QPainter, clip: QPainterPath):
         """A soft pool of light under the pointer, clipped to the art itself."""
