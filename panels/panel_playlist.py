@@ -19,7 +19,20 @@ import library_cache
 # by it is what takes the view back to that order.
 _COL_NUM, _COL_TITLE, _COL_ARTIST, _COL_ALBUM, _COL_TIME = range(5)
 _COL_LABELS = ("#", "Title", "Artist", "Album", "Time")
-_SORT_ROLE  = Qt.UserRole + 1     # what a column sorts on, apart from its text
+
+
+def _fmt_time(secs: float) -> str:
+    """mm:ss, zero padded so the column sorts on its own text.
+
+    Qt sorts a column by comparing what it displays, and "9:00" lands before
+    "10:00" when that comparison is done on strings. Padding the minutes fixes
+    the order for anything under 100 minutes, which is every track in practice,
+    and costs a leading zero on the short ones.
+    """
+    if not secs or secs <= 0:
+        return ""
+    m, s = divmod(int(secs), 60)
+    return f"{m:02d}:{s:02d}"
 
 
 def _refused_message(refused: list[Path]) -> str:
@@ -33,113 +46,6 @@ def _refused_message(refused: list[Path]) -> str:
     if not only:
         return f"Skipped {files} with no extension"
     return f"Skipped {files}, unrecognised extension: {only}"
-
-
-def _fmt_time(secs: float) -> str:
-    if not secs or secs <= 0:
-        return ""
-    m, s = divmod(int(secs), 60)
-    return f"{m}:{s:02d}"
-
-
-class _Row(QTreeWidgetItem):
-    """A playlist row that sorts on a stored key rather than on its own text.
-
-    Track number and duration are numbers, and comparing them as strings puts
-    10 before 2 and 1:05 before 59:00.
-    """
-
-    def __lt__(self, other):
-        tree = self.treeWidget()
-        col  = tree.sortColumn() if tree else _COL_NUM
-        a = self.data(col, _SORT_ROLE)
-        b = other.data(col, _SORT_ROLE)
-        if a is None or b is None:
-            return super().__lt__(other)
-        return a < b
-
-
-_last_dir: str = str(Path.home())
-
-
-def _open_folder(path: Path):
-
-    try:
-        if sys.platform.startswith("linux"):
-            subprocess.Popen(["xdg-open", str(path.parent)])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", str(path)])
-        else:
-            subprocess.Popen(["explorer", "/select,", str(path)])
-    except Exception:
-        pass
-
-
-class _TagEditDialog(QDialog):
-    _FIELDS = [
-        ("title",       "Title"),
-        ("artist",      "Artist"),
-        ("albumartist", "Album Artist"),
-        ("album",       "Album"),
-        ("date",        "Year"),
-        ("genre",       "Genre"),
-        ("tracknumber", "Track #"),
-        ("discnumber",  "Disc #"),
-        ("composer",    "Composer"),
-        ("comment",     "Comment"),
-    ]
-
-    def __init__(self, path: Path, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"Edit Tags — {path.name}")
-        self.resize(440, 320)
-        self._path = path
-        self._mutagen = None
-
-        try:
-            from mutagen import File as MFile
-            self._mutagen = MFile(str(path), easy=True)
-        except Exception:
-            pass
-
-        form = QFormLayout(self)
-        self._edits: dict[str, QLineEdit] = {}
-
-        for key, label in self._FIELDS:
-            val = ""
-            if self._mutagen is not None:
-                v = self._mutagen.get(key)
-                if v:
-                    val = str(v[0])
-            le = QLineEdit(val)
-            self._edits[key] = le
-            form.addRow(label + ":", le)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._save)
-        btns.rejected.connect(self.reject)
-        form.addRow(btns)
-
-    def _save(self):
-        if self._mutagen is None:
-            QMessageBox.warning(self, "Error", "Cannot write tags for this format.")
-            return
-        try:
-            for key, _label in self._FIELDS:
-                val = self._edits[key].text().strip()
-                if val:
-                    self._mutagen[key] = [val]
-                elif key in self._mutagen:
-                    del self._mutagen[key]
-            self._mutagen.save()
-            self.accept()
-        except Exception as e:
-            QMessageBox.warning(self, "Save Error", str(e))
-
-_SESSION = Path.home() / ".config" / "audiocrate" / "playlists.json"
-
-
-_MAX_UNDO = 20
 
 
 class _PlaylistTab(QTreeWidget):
@@ -212,10 +118,9 @@ class _PlaylistTab(QTreeWidget):
     def takeItem(self, i: int):
         return self.takeTopLevelItem(i)
 
-    def _make_item(self, p: Path) -> _Row:
-        item = _Row([""] * len(_COL_LABELS))
+    def _make_item(self, p: Path) -> QTreeWidgetItem:
+        item = QTreeWidgetItem([""] * len(_COL_LABELS))
         item.setText(_COL_TITLE, p.stem)
-        item.setData(_COL_TITLE, _SORT_ROLE, p.stem.lower())
         item.setData(_COL_NUM, Qt.UserRole, p)   # identity survives drag-reorder
         item.setTextAlignment(_COL_NUM,  Qt.AlignRight  | Qt.AlignVCenter)
         item.setTextAlignment(_COL_TIME, Qt.AlignRight  | Qt.AlignVCenter)
@@ -223,7 +128,7 @@ class _PlaylistTab(QTreeWidget):
             self._mark_missing(item, p)
         return item
 
-    def _mark_missing(self, item: _Row, p: Path):
+    def _mark_missing(self, item: QTreeWidgetItem, p: Path):
         """Grey out a row whose file isn't currently on disk. The entry is kept
         (and saved), never silently dropped; it plays again when the drive is back."""
         f = item.font(_COL_TITLE)
@@ -244,8 +149,9 @@ class _PlaylistTab(QTreeWidget):
         for i in range(self.topLevelItemCount()):
             it = self.topLevelItem(i)
             pos = order.get(self._path_of(it), i)
-            it.setText(_COL_NUM, str(pos + 1))
-            it.setData(_COL_NUM, _SORT_ROLE, pos)
+            # an int, not its text: Qt compares the display value as a
+            # QVariant, so this sorts 2 before 10 with no help from us
+            it.setData(_COL_NUM, Qt.DisplayRole, pos + 1)
 
     # sorting
 
@@ -290,10 +196,8 @@ class _PlaylistTab(QTreeWidget):
                              (_COL_ALBUM,  t.get("album")  or "")):
                 if not it.text(_COL_TITLE).startswith(">> ") or col != _COL_TITLE:
                     it.setText(col, val)
-                it.setData(col, _SORT_ROLE, str(val).lower())
             dur = float(t.get("duration") or 0.0)
             it.setText(_COL_TIME, _fmt_time(dur))
-            it.setData(_COL_TIME, _SORT_ROLE, dur)
 
     def missing_count(self) -> int:
         return sum(1 for p in self._manual if not p.exists())
@@ -365,11 +269,11 @@ class _PlaylistTab(QTreeWidget):
             was_manual = self.manual_mode()
             self.setSortingEnabled(False)      # a live sort would undo the drop
             super().dropEvent(e)
-            self.setSortingEnabled(True)
             self._sync_from_items()
             if was_manual:
                 self._manual = list(self._tracks)
             self._renumber()
+            self.setSortingEnabled(True)
 
     def _snapshot(self):
         self._history.append((list(self._tracks), list(self._manual)))
@@ -386,8 +290,8 @@ class _PlaylistTab(QTreeWidget):
         self.setSortingEnabled(False)
         for p in self._tracks:
             self.addTopLevelItem(self._make_item(p))
-        self.setSortingEnabled(True)
         self._renumber()
+        self.setSortingEnabled(True)
         self._request_tags(self._tracks)
 
     def add_paths(self, paths: list[Path]) -> list[Path]:
@@ -411,9 +315,9 @@ class _PlaylistTab(QTreeWidget):
         for p in added:
             self._manual.append(p)
             self.addTopLevelItem(self._make_item(p))
-        self.setSortingEnabled(True)
         self._sync_from_items()
         self._renumber()
+        self.setSortingEnabled(True)
         self._request_tags(added)
         return added
 
@@ -447,7 +351,6 @@ class _PlaylistTab(QTreeWidget):
             return
         it.setData(_COL_NUM, Qt.UserRole, new_path)
         it.setText(_COL_TITLE, new_path.stem)
-        it.setData(_COL_TITLE, _SORT_ROLE, new_path.stem.lower())
         if old in self._manual:
             self._manual[self._manual.index(old)] = new_path
         self._sync_from_items()
