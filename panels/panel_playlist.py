@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QMenu, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QMessageBox,
     QApplication,
 )
-from PySide6.QtCore import Qt, Signal, QUrl, QTimer
+from PySide6.QtCore import Qt, Signal, QUrl, QTimer, QByteArray
 from PySide6.QtGui  import QShortcut, QKeySequence, QDragEnterEvent, QDropEvent
 from player import Player, PLAYABLE_EXTS
 import threading
@@ -19,6 +19,10 @@ import library_cache
 # by it is what takes the view back to that order.
 _COL_NUM, _COL_TITLE, _COL_ARTIST, _COL_ALBUM, _COL_TIME = range(5)
 _COL_LABELS = ("#", "Title", "Artist", "Album", "Time")
+# Starting widths only. Every column is draggable and whatever you drag it to
+# is what gets saved, so these matter once and then never again.
+_COL_WIDTHS = {_COL_NUM: 44, _COL_TITLE: 260, _COL_ARTIST: 150,
+               _COL_ALBUM: 150, _COL_TIME: 62}
 
 
 _last_dir: str = str(Path.home())
@@ -161,11 +165,14 @@ class _PlaylistTab(QTreeWidget):
         hdr = self.header()
         hdr.setSectionsClickable(True)
         hdr.setSortIndicatorShown(True)
-        hdr.setSectionResizeMode(_COL_TITLE,  QHeaderView.Stretch)
-        hdr.setSectionResizeMode(_COL_ARTIST, QHeaderView.Interactive)
-        hdr.setSectionResizeMode(_COL_ALBUM,  QHeaderView.Interactive)
-        hdr.setSectionResizeMode(_COL_NUM,    QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeToContents)
+        # Every column is Interactive, so every one can be dragged and stays
+        # where it is put. Stretch and ResizeToContents each take that away:
+        # Stretch refuses to be dragged at all, and ResizeToContents moves on
+        # its own every time a tag arrives and changes what is in the column.
+        hdr.setStretchLastSection(False)
+        for _c, _w in _COL_WIDTHS.items():
+            hdr.setSectionResizeMode(_c, QHeaderView.Interactive)
+            self.setColumnWidth(_c, _w)
         hdr.sortIndicatorChanged.connect(self._on_sort_changed)
         self.setSortingEnabled(True)
         self.sortByColumn(_COL_NUM, Qt.AscendingOrder)
@@ -235,6 +242,23 @@ class _PlaylistTab(QTreeWidget):
             # an int, not its text: Qt compares the display value as a
             # QVariant, so this sorts 2 before 10 with no help from us
             it.setData(_COL_NUM, Qt.DisplayRole, pos + 1)
+
+    # column layout
+
+    def header_state(self) -> str:
+        """Widths, order and the sort indicator, as text a JSON file can hold."""
+        return bytes(self.header().saveState().toBase64()).decode("ascii")
+
+    def restore_header_state(self, blob: str) -> bool:
+        """Put back a layout saved earlier. A blob from an older column set is
+        rejected by Qt rather than applied badly, so a False here is fine."""
+        if not blob:
+            return False
+        try:
+            return self.header().restoreState(
+                QByteArray.fromBase64(blob.encode("ascii")))
+        except Exception:
+            return False
 
     # sorting
 
@@ -498,6 +522,9 @@ class PlaylistPanel(QWidget):
         self._player     = player
         self._active_tab = 0
         self._clipboard: list[Path] = []
+        # The saved column layout, read back before any tab exists to hold it.
+        # _build runs _load_session, which fills this in when there is one.
+        self._columns: str = ""
         self._build()
 
         player.track_changed.connect(self._on_track_changed)
@@ -584,6 +611,10 @@ class PlaylistPanel(QWidget):
         lst = _PlaylistTab()
         lst.play_requested.connect(self._on_play_from_tab)
         lst.notify.connect(self.notify)
+        # a new tab takes the column layout the others are already using
+        cur = self._current_list()
+        lst.restore_header_state(cur.header_state() if cur is not None
+                                 else self._columns)
         lst.setContextMenuPolicy(Qt.CustomContextMenu)
         lst.customContextMenuRequested.connect(lambda pos, l=lst: self._ctx_menu(pos, l))
         return lst
@@ -618,14 +649,27 @@ class PlaylistPanel(QWidget):
             return False
         if not data:
             return False
+        # The file used to be a bare list of tabs. It is a dict now so the
+        # column layout can travel with them, and a list still loads.
+        if isinstance(data, dict):
+            entries = data.get("tabs") or []
+            columns = data.get("columns") or ""
+        else:
+            entries = data
+            columns = ""
+        if not entries:
+            return False
+        self._columns = columns
         missing = 0
         total = 0
-        for entry in data:
+        for entry in entries:
             name  = entry.get("name", "Playlist")
             # keep unavailable tracks (greyed) — never silently shrink a saved list
             paths = [Path(s) for s in entry.get("paths", [])]
             lst   = self._make_tab()
             lst.add_paths(paths)
+            # after the rows, so a saved sort applies to a populated tab
+            lst.restore_header_state(columns)
             self._tabs.addTab(lst, name)
             missing += lst.missing_count()
             total   += len(paths)
@@ -650,7 +694,16 @@ class PlaylistPanel(QWidget):
                     "name":  self._tabs.tabText(i),
                     "paths": [str(p) for p in lst.manual_paths()],
                 })
-        _SESSION.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # One layout for all the tabs, since they all show the same columns.
+        # Whichever is in front is the one whose widths were last touched.
+        cur = self._current_list()
+        if cur is None:
+            cur = next((self._tabs.widget(i) for i in range(self._tabs.count())
+                        if isinstance(self._tabs.widget(i), _PlaylistTab)), None)
+        columns = cur.header_state() if cur is not None else self._columns
+        _SESSION.write_text(
+            json.dumps({"tabs": data, "columns": columns}, indent=2),
+            encoding="utf-8")
 
     def _on_tab_change(self, idx: int):
         self._active_tab = idx
