@@ -52,6 +52,17 @@ def _read_tags(path: Path) -> dict:
                 duration = float(info.length)
     except Exception:
         pass
+    if duration <= 0.0:
+        # mutagen only knows the containers it was written for, which is a small
+        # part of what this plays, and a track with no length shows an empty
+        # Time column. ffprobe measures anything ffmpeg can demux. It is a
+        # subprocess, but this whole function is the slow path behind the cache
+        # and runs once per file.
+        try:
+            from ffmpeg_util import probe_duration
+            duration = probe_duration(path)
+        except Exception:
+            pass
     return {"title": title, "artist": artist, "album": album, "duration": duration}
 
 
@@ -136,6 +147,28 @@ def get_many(paths: list[Path]) -> dict[Path, dict]:
                 " VALUES (?,?,?,?,?,?)", fresh)
             db.commit()
     return result
+
+
+def remember_duration(path: Path, seconds: float) -> None:
+    """Keep a length that only the player could work out.
+
+    A chiptune carries no duration and ffmpeg cannot decode one either, so
+    neither mutagen nor ffprobe has anything to say about a .fur or a .sid. The
+    players measure them to draw a seek bar, and that answer is worth keeping:
+    without it the Time column stays empty for exactly the formats this is for.
+
+    Only fills a gap. A length already read from the file is the better one.
+    """
+    if seconds is None or seconds <= 0.0:
+        return
+    key = str(Path(path))
+    with _lock:
+        db = _db()
+        row = db.execute("SELECT duration FROM tracks WHERE path=?", (key,)).fetchone()
+        if row is None or (row[0] or 0.0) > 0.0:
+            return
+        db.execute("UPDATE tracks SET duration=? WHERE path=?", (float(seconds), key))
+        db.commit()
 
 
 def forget(path: Path):

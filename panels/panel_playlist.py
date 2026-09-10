@@ -14,6 +14,9 @@ from PySide6.QtGui  import QShortcut, QKeySequence, QDragEnterEvent, QDropEvent
 from player import Player, PLAYABLE_EXTS
 import threading
 import library_cache
+import logs
+
+_log = logs.get("tags")
 
 # Columns. The leading one is the order the rows were dragged into, and sorting
 # by it is what takes the view back to that order.
@@ -294,20 +297,35 @@ class _PlaylistTab(QTreeWidget):
         """
         if not paths:
             return
+        want = list(paths)
+
         def _run():
             try:
-                tags = library_cache.get_many(list(paths))
+                tags = library_cache.get_many(want)
             except Exception:
+                # This used to return quietly, which is why an empty column
+                # looked like a file with no tags rather than a read that failed.
+                _log.exception("tag read failed for %d file(s)", len(want))
                 return
+            _log.debug("read tags for %d of %d file(s)", len(tags), len(want))
             self._tags_ready.emit(tags)
+
         threading.Thread(target=_run, daemon=True).start()
 
     def _apply_tags(self, tags: dict):
+        # Keyed by the path as text. get_many hands back a dict keyed by the Path
+        # objects it was given, and the ones on the rows have been through Qt's
+        # item data, so matching on the object itself depends on what comes back
+        # out of that. The string does not.
+        by_path = {str(k): v for k, v in tags.items()}
+        applied = 0
         for i in range(self.topLevelItemCount()):
             it = self.topLevelItem(i)
-            t  = tags.get(self._path_of(it))
+            path = self._path_of(it)
+            t = by_path.get(str(path)) if path is not None else None
             if not t:
                 continue
+            applied += 1
             title = t.get("title") or it.text(_COL_TITLE)
             for col, val in ((_COL_TITLE, title),
                              (_COL_ARTIST, t.get("artist") or ""),
@@ -315,11 +333,36 @@ class _PlaylistTab(QTreeWidget):
                 it.setText(col, val)
             dur = float(t.get("duration") or 0.0)
             it.setText(_COL_TIME, _fmt_time(dur))
+        if applied != len(by_path):
+            _log.debug("applied %d of %d tag result(s) to %d row(s)",
+                       applied, len(by_path), self.topLevelItemCount())
         # Tags land on a worker thread's answer, and title, artist, album and
         # time are all columns you can sort by, so writing them re-sorts the
         # tree. _tracks has to follow, since it is what every click is resolved
         # against and a stale one points at the wrong track.
         self._sync_from_items()
+
+    def note_duration(self, path: Path, seconds: float) -> None:
+        """Fill in a Time the player worked out and nothing else could.
+
+        Chiptunes carry no length, and ffmpeg cannot read one out of them
+        either, so the column is empty until something plays the file and
+        measures it. That answer is written into the row and into the tag cache,
+        so it is there next time without playing anything.
+        """
+        if seconds <= 0.0:
+            return
+        for i in range(self.topLevelItemCount()):
+            it = self.topLevelItem(i)
+            if self._path_of(it) != path or it.text(_COL_TIME):
+                continue
+            it.setText(_COL_TIME, _fmt_time(seconds))
+            self._sync_from_items()       # writing a sortable column re-sorts
+            try:
+                library_cache.remember_duration(path, seconds)
+            except Exception:
+                pass
+            return
 
     def missing_count(self) -> int:
         return sum(1 for p in self._manual if not p.exists())
@@ -908,6 +951,7 @@ class PlaylistPanel(QWidget):
         lst = self._current_list()
         if lst:
             lst.highlight(self._player.index)
+            lst.note_duration(track.path, self._player.duration_ms / 1000.0)
 
     def _save(self):
         global _last_dir

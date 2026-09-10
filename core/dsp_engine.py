@@ -83,16 +83,8 @@ def _duration_ms(path: Path) -> int:
     except Exception:
         pass
     try:
-        from ffmpeg_util import ffmpeg_path
-        exe = ffmpeg_path()
-        if exe:
-            probe = exe.replace("ffmpeg", "ffprobe")
-            r = subprocess.run(
-                [probe, "-v", "quiet", "-show_entries", "format=duration",
-                 "-of", "default=nw=1:nk=1", str(path)],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
-            )
-            return int(float(r.stdout.decode().strip()) * 1000)
+        from ffmpeg_util import probe_duration
+        return int(probe_duration(path) * 1000)
     except Exception:
         pass
     return 0

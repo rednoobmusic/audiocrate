@@ -1,6 +1,7 @@
 """Resolve the ffmpeg binary — bundled next to the executable takes priority."""
 from __future__ import annotations
 import shutil
+import subprocess
 from pathlib import Path
 import sys
 
@@ -40,3 +41,29 @@ def ffmpeg_path() -> str | None:
 
 def ffmpeg_available() -> bool:
     return bool(ffmpeg_path())
+
+
+def probe_duration(path: Path | str) -> float:
+    """Seconds according to ffprobe, or 0.0 if it cannot say.
+
+    mutagen knows the container formats it was written for and nothing else, so
+    for most of the 249 extensions this plays it returns no length at all. What
+    ffmpeg can demux, ffprobe can measure, which is nearly all of them.
+
+    A subprocess per file, so this belongs behind a cache and on the slow path.
+    Chiptunes are not covered: ffmpeg cannot decode a .fur or a .sid either, and
+    those are measured by the players that can.
+    """
+    try:
+        exe = ffmpeg_path()
+        if not exe:
+            return 0.0
+        probe = exe.replace("ffmpeg", "ffprobe")
+        r = subprocess.run(
+            [probe, "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+        )
+        return float(r.stdout.decode().strip())
+    except Exception:
+        return 0.0
