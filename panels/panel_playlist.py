@@ -250,7 +250,14 @@ class _PlaylistTab(QTreeWidget):
 
     def _renumber(self):
         """Put each row's place in the dragged order into the leading column."""
-        order = {p: i for i, p in enumerate(self._manual)}
+        # First occurrence wins. A dict comprehension keeps the last, so a
+        # duplicate in the dragged order numbered both rows from the later one.
+        order: dict[Path, int] = {}
+        for i, path in enumerate(self._manual):
+            order.setdefault(path, i)
+        if len(order) != len(self._manual):
+            _log.debug("dragged order holds %d entries for %d distinct files",
+                       len(self._manual), len(order))
         for i in range(self.topLevelItemCount()):
             it = self.topLevelItem(i)
             pos = order.get(self._path_of(it), i)
@@ -501,7 +508,17 @@ class _PlaylistTab(QTreeWidget):
         if refused:
             self.notify.emit(_refused_message(refused))
 
-        added = [p for p in playable if p not in self._manual]
+        # Deduped against what is here and against itself. The comprehension
+        # only used to check _manual, so a list carrying the same file twice put
+        # it in twice, and the leading column then numbered every row from the
+        # second copy of whatever came before it.
+        seen = set(self._manual)
+        added = []
+        for p in playable:
+            if p in seen:
+                continue
+            seen.add(p)
+            added.append(p)
         if added:
             self._snapshot()
         self.setSortingEnabled(False)

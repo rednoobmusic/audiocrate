@@ -16,6 +16,11 @@ from pathlib import Path
 _DB_PATH = Path.home() / ".config" / "audiocrate" / "library.db"
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
+_warned_no_mutagen = False
+
+import logs
+
+_log = logs.get("tags")
 
 
 def _db() -> sqlite3.Connection:
@@ -61,7 +66,17 @@ def _read_tags(path: Path) -> dict:
     try:
         from mutagen import File as MFile
         f = MFile(str(path), easy=True)
+    except ImportError:
+        # Without mutagen every file falls back to its own filename, which is
+        # what a title column full of filenames and empty artist and album
+        # columns actually looks like. Worth saying once rather than never.
+        global _warned_no_mutagen
+        if not _warned_no_mutagen:
+            _warned_no_mutagen = True
+            _log.error("mutagen is not installed, so no tags can be read at all")
+        f = None
     except Exception:
+        _log.debug("mutagen could not open %s", path.name, exc_info=True)
         f = None
 
     if f is not None:
