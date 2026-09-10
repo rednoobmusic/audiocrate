@@ -18,6 +18,13 @@ _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 _warned_no_mutagen = False
 
+# Bump this whenever a change makes previously cached rows wrong. A row is only
+# re-read when the file's mtime moves, so a bad reader poisons the cache for the
+# life of the files it read: the tags guard removed in ded2ab7 wrote a filename
+# and two empty strings for anything whose tags object looked empty, and every
+# one of those rows would have been served for ever.
+_SCHEMA_VERSION = 2
+
 import logs
 
 _log = logs.get("tags")
@@ -37,6 +44,14 @@ def _db() -> sqlite3.Connection:
             "  path TEXT PRIMARY KEY, mtime REAL,"
             "  title TEXT, artist TEXT, album TEXT, duration REAL)"
         )
+        ver = _conn.execute("PRAGMA user_version").fetchone()[0]
+        if ver != _SCHEMA_VERSION:
+            # Everything is re-read on demand, so throwing the rows away costs
+            # one slow pass and fixes rows no mtime will ever invalidate.
+            _conn.execute("DELETE FROM tracks")
+            _conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION:d}")
+            _log.info("tag cache cleared, re-reading (schema %s to %s)",
+                      ver, _SCHEMA_VERSION)
         _conn.commit()
     return _conn
 
