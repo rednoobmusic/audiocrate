@@ -21,6 +21,89 @@ _COL_NUM, _COL_TITLE, _COL_ARTIST, _COL_ALBUM, _COL_TIME = range(5)
 _COL_LABELS = ("#", "Title", "Artist", "Album", "Time")
 
 
+_last_dir: str = str(Path.home())
+
+
+def _open_folder(path: Path):
+
+    try:
+        if sys.platform.startswith("linux"):
+            subprocess.Popen(["xdg-open", str(path.parent)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["explorer", "/select,", str(path)])
+    except Exception:
+        pass
+
+
+class _TagEditDialog(QDialog):
+    _FIELDS = [
+        ("title",       "Title"),
+        ("artist",      "Artist"),
+        ("albumartist", "Album Artist"),
+        ("album",       "Album"),
+        ("date",        "Year"),
+        ("genre",       "Genre"),
+        ("tracknumber", "Track #"),
+        ("discnumber",  "Disc #"),
+        ("composer",    "Composer"),
+        ("comment",     "Comment"),
+    ]
+
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit Tags — {path.name}")
+        self.resize(440, 320)
+        self._path = path
+        self._mutagen = None
+
+        try:
+            from mutagen import File as MFile
+            self._mutagen = MFile(str(path), easy=True)
+        except Exception:
+            pass
+
+        form = QFormLayout(self)
+        self._edits: dict[str, QLineEdit] = {}
+
+        for key, label in self._FIELDS:
+            val = ""
+            if self._mutagen is not None:
+                v = self._mutagen.get(key)
+                if v:
+                    val = str(v[0])
+            le = QLineEdit(val)
+            self._edits[key] = le
+            form.addRow(label + ":", le)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._save)
+        btns.rejected.connect(self.reject)
+        form.addRow(btns)
+
+    def _save(self):
+        if self._mutagen is None:
+            QMessageBox.warning(self, "Error", "Cannot write tags for this format.")
+            return
+        try:
+            for key, _label in self._FIELDS:
+                val = self._edits[key].text().strip()
+                if val:
+                    self._mutagen[key] = [val]
+                elif key in self._mutagen:
+                    del self._mutagen[key]
+            self._mutagen.save()
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(self, "Save Error", str(e))
+
+_SESSION = Path.home() / ".config" / "audiocrate" / "playlists.json"
+
+
+_MAX_UNDO = 20
+
+
 def _fmt_time(secs: float) -> str:
     """mm:ss, zero padded so the column sorts on its own text.
 
