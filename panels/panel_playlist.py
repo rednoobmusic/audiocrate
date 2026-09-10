@@ -183,10 +183,6 @@ class _PlaylistTab(QTreeWidget):
         self.itemDoubleClicked.connect(
             lambda item, _c=0: self.play_requested.emit(self.indexOfTopLevelItem(item))
         )
-        # Enter/Return plays the selected row (double-click only before)
-        self.itemActivated.connect(
-            lambda item, _c=0: self.play_requested.emit(self.indexOfTopLevelItem(item))
-        )
         self._tags_ready.connect(self._apply_tags)
         # A cross-tab drag removes the source row after the drop finishes,
         # detect the resulting desync and rebuild _tracks from the items.
@@ -207,6 +203,21 @@ class _PlaylistTab(QTreeWidget):
 
     def takeItem(self, i: int):
         return self.takeTopLevelItem(i)
+
+    def keyPressEvent(self, e):
+        """Return plays the selection.
+
+        itemActivated used to carry this. On a style that activates on a single
+        click, which several do, it fires for an ordinary click as well, so
+        selecting a row restarted whatever was playing. A key handler means it
+        happens when the key is pressed and at no other time.
+        """
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+            item = self.currentItem()
+            if item is not None:
+                self.play_requested.emit(self.indexOfTopLevelItem(item))
+                return
+        super().keyPressEvent(e)
 
     def _make_item(self, p: Path) -> QTreeWidgetItem:
         item = QTreeWidgetItem([""] * len(_COL_LABELS))
@@ -301,10 +312,14 @@ class _PlaylistTab(QTreeWidget):
             for col, val in ((_COL_TITLE, title),
                              (_COL_ARTIST, t.get("artist") or ""),
                              (_COL_ALBUM,  t.get("album")  or "")):
-                if not it.text(_COL_TITLE).startswith(">> ") or col != _COL_TITLE:
-                    it.setText(col, val)
+                it.setText(col, val)
             dur = float(t.get("duration") or 0.0)
             it.setText(_COL_TIME, _fmt_time(dur))
+        # Tags land on a worker thread's answer, and title, artist, album and
+        # time are all columns you can sort by, so writing them re-sorts the
+        # tree. _tracks has to follow, since it is what every click is resolved
+        # against and a stale one points at the wrong track.
+        self._sync_from_items()
 
     def missing_count(self) -> int:
         return sum(1 for p in self._manual if not p.exists())
@@ -470,12 +485,25 @@ class _PlaylistTab(QTreeWidget):
         self._manual.clear()
 
     def highlight(self, idx: int):
+        """Bold whichever row is playing.
+
+        The marker was a ">> " written onto the title. Title is a column you can
+        sort by, so writing to it re-sorted the tree every time the track
+        changed, and _tracks then no longer matched the rows on screen. Since
+        every click is resolved to a track through _tracks, clicking anything
+        afterwards acted on the wrong one. A font weight carries no sort value.
+
+        The row is found by path rather than by index so that sorting by a
+        column does not leave the bold on whatever moved into that position.
+        """
+        want = self._tracks[idx] if 0 <= idx < len(self._tracks) else None
         for i in range(self.topLevelItemCount()):
             item = self.topLevelItem(i)
-            base = item.text(_COL_TITLE).removeprefix(">> ")
-            item.setText(_COL_TITLE, (">> " + base) if i == idx else base)
+            on = want is not None and self._path_of(item) == want
             f = item.font(_COL_TITLE)
-            f.setBold(i == idx)
+            if f.bold() == on:
+                continue                   # already right, and writing costs a repaint
+            f.setBold(on)
             for c in range(len(_COL_LABELS)):
                 item.setFont(c, f)
 
