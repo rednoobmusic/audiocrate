@@ -5,13 +5,45 @@ import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTabWidget,
-    QListWidget, QListWidgetItem, QFileDialog, QInputDialog,
+    QTreeWidget, QTreeWidgetItem, QHeaderView, QFileDialog, QInputDialog,
     QMenu, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QMessageBox,
     QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QUrl, QTimer
 from PySide6.QtGui  import QShortcut, QKeySequence, QDragEnterEvent, QDropEvent
 from player import Player, PLAYABLE_EXTS
+import threading
+import library_cache
+
+# Columns. The leading one is the order the rows were dragged into, and sorting
+# by it is what takes the view back to that order.
+_COL_NUM, _COL_TITLE, _COL_ARTIST, _COL_ALBUM, _COL_TIME = range(5)
+_COL_LABELS = ("#", "Title", "Artist", "Album", "Time")
+_SORT_ROLE  = Qt.UserRole + 1     # what a column sorts on, apart from its text
+
+
+def _fmt_time(secs: float) -> str:
+    if not secs or secs <= 0:
+        return ""
+    m, s = divmod(int(secs), 60)
+    return f"{m}:{s:02d}"
+
+
+class _Row(QTreeWidgetItem):
+    """A playlist row that sorts on a stored key rather than on its own text.
+
+    Track number and duration are numbers, and comparing them as strings puts
+    10 before 2 and 1:05 before 59:00.
+    """
+
+    def __lt__(self, other):
+        tree = self.treeWidget()
+        col  = tree.sortColumn() if tree else _COL_NUM
+        a = self.data(col, _SORT_ROLE)
+        b = other.data(col, _SORT_ROLE)
+        if a is None or b is None:
+            return super().__lt__(other)
+        return a < b
 
 
 _last_dir: str = str(Path.home())
@@ -97,73 +129,188 @@ _SESSION = Path.home() / ".config" / "audiocrate" / "playlists.json"
 _MAX_UNDO = 20
 
 
-class _PlaylistTab(QListWidget):
+class _PlaylistTab(QTreeWidget):
+    """One playlist tab.
+
+    Two orders are kept. `_manual` is the order the rows were dragged into and
+    is what gets saved, and `_tracks` is what is currently on screen, which is
+    the same thing until a column header is clicked. Playback follows the
+    visible order, so `_tracks` stays row-for-row with the tree and every index
+    that comes out of a click means the same thing it always did.
+    """
+
     play_requested = Signal(int)
+    _tags_ready    = Signal(object)      # {Path: tags}, from the reader thread
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setColumnCount(len(_COL_LABELS))
+        self.setHeaderLabels(_COL_LABELS)
+        self.setRootIsDecorated(False)
+        self.setUniformRowHeights(True)
         self.setAlternatingRowColors(True)
-        self.setDragDropMode(QListWidget.DragDrop)
+        self.setDragDropMode(QTreeWidget.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
-        self.setSelectionMode(QListWidget.ExtendedSelection)
+        self.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self.setSelectionBehavior(QTreeWidget.SelectRows)
         self.setAcceptDrops(True)
-        self._tracks:  list[Path]       = []
-        self._history: list[list[Path]] = []
+
+        hdr = self.header()
+        hdr.setSectionsClickable(True)
+        hdr.setSortIndicatorShown(True)
+        hdr.setSectionResizeMode(_COL_TITLE,  QHeaderView.Stretch)
+        hdr.setSectionResizeMode(_COL_ARTIST, QHeaderView.Interactive)
+        hdr.setSectionResizeMode(_COL_ALBUM,  QHeaderView.Interactive)
+        hdr.setSectionResizeMode(_COL_NUM,    QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(_COL_TIME,   QHeaderView.ResizeToContents)
+        hdr.sortIndicatorChanged.connect(self._on_sort_changed)
+        self.setSortingEnabled(True)
+        self.sortByColumn(_COL_NUM, Qt.AscendingOrder)
+
+        self._tracks:  list[Path]       = []    # visible order
+        self._manual:  list[Path]       = []    # dragged order, the one that saves
+        self._history: list[tuple[list[Path], list[Path]]] = []
         self.itemDoubleClicked.connect(
-            lambda item: self.play_requested.emit(self.row(item))
+            lambda item, _c=0: self.play_requested.emit(self.indexOfTopLevelItem(item))
         )
         # Enter/Return plays the selected row (double-click only before)
         self.itemActivated.connect(
-            lambda item: self.play_requested.emit(self.row(item))
+            lambda item, _c=0: self.play_requested.emit(self.indexOfTopLevelItem(item))
         )
-        # A cross-tab drag removes the source row after the drop finishes —
+        self._tags_ready.connect(self._apply_tags)
+        # A cross-tab drag removes the source row after the drop finishes,
         # detect the resulting desync and rebuild _tracks from the items.
         self.model().rowsRemoved.connect(
             lambda *_: QTimer.singleShot(0, self._sync_if_desynced))
 
-    def _make_item(self, p: Path) -> QListWidgetItem:
-        item = QListWidgetItem(p.stem)
-        item.setData(Qt.UserRole, p)   # the row's identity survives drag-reorder
+    # rows
+
+    def count(self) -> int:
+        """Kept from the QListWidget this used to be, so callers read the same."""
+        return self.topLevelItemCount()
+
+    def item(self, i: int):
+        return self.topLevelItem(i)
+
+    def row(self, item) -> int:
+        return self.indexOfTopLevelItem(item)
+
+    def takeItem(self, i: int):
+        return self.takeTopLevelItem(i)
+
+    def _make_item(self, p: Path) -> _Row:
+        item = _Row([""] * len(_COL_LABELS))
+        item.setText(_COL_TITLE, p.stem)
+        item.setData(_COL_TITLE, _SORT_ROLE, p.stem.lower())
+        item.setData(_COL_NUM, Qt.UserRole, p)   # identity survives drag-reorder
+        item.setTextAlignment(_COL_NUM,  Qt.AlignRight  | Qt.AlignVCenter)
+        item.setTextAlignment(_COL_TIME, Qt.AlignRight  | Qt.AlignVCenter)
         if not p.exists():
             self._mark_missing(item, p)
         return item
 
-    def _mark_missing(self, item: QListWidgetItem, p: Path):
-        """Grey out a row whose file isn't currently on disk — the entry is kept
+    def _mark_missing(self, item: _Row, p: Path):
+        """Grey out a row whose file isn't currently on disk. The entry is kept
         (and saved), never silently dropped; it plays again when the drive is back."""
-        f = item.font()
+        f = item.font(_COL_TITLE)
         f.setItalic(True)
-        item.setFont(f)
-        item.setForeground(self.palette().color(
-            self.palette().ColorGroup.Disabled, self.palette().ColorRole.Text))
-        item.setToolTip(f"File missing:\n{p}")
+        grey = self.palette().color(
+            self.palette().ColorGroup.Disabled, self.palette().ColorRole.Text)
+        for c in range(len(_COL_LABELS)):
+            item.setFont(c, f)
+            item.setForeground(c, grey)
+        item.setToolTip(_COL_TITLE, f"File missing:\n{p}")
+
+    def _path_of(self, item) -> Path | None:
+        return item.data(_COL_NUM, Qt.UserRole) if item is not None else None
+
+    def _renumber(self):
+        """Put each row's place in the dragged order into the leading column."""
+        order = {p: i for i, p in enumerate(self._manual)}
+        for i in range(self.topLevelItemCount()):
+            it = self.topLevelItem(i)
+            pos = order.get(self._path_of(it), i)
+            it.setText(_COL_NUM, str(pos + 1))
+            it.setData(_COL_NUM, _SORT_ROLE, pos)
+
+    # sorting
+
+    def manual_mode(self) -> bool:
+        """True while the view is showing the dragged order, which is the only
+        time rearranging rows by hand means anything."""
+        return (self.sortColumn() == _COL_NUM
+                and self.header().sortIndicatorOrder() == Qt.AscendingOrder)
+
+    def _on_sort_changed(self, *_):
+        manual = self.manual_mode()
+        self.setDragDropMode(QTreeWidget.DragDrop if manual else QTreeWidget.DropOnly)
+        QTimer.singleShot(0, self._sync_from_items)
+
+    # tags
+
+    def _request_tags(self, paths: list[Path]):
+        """Fill Artist, Album and Time from the tag cache, off the UI thread.
+
+        A cold cache means one mutagen read per file, which is why adding a large
+        folder used to freeze the window.
+        """
+        if not paths:
+            return
+        def _run():
+            try:
+                tags = library_cache.get_many(list(paths))
+            except Exception:
+                return
+            self._tags_ready.emit(tags)
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _apply_tags(self, tags: dict):
+        for i in range(self.topLevelItemCount()):
+            it = self.topLevelItem(i)
+            t  = tags.get(self._path_of(it))
+            if not t:
+                continue
+            title = t.get("title") or it.text(_COL_TITLE)
+            for col, val in ((_COL_TITLE, title),
+                             (_COL_ARTIST, t.get("artist") or ""),
+                             (_COL_ALBUM,  t.get("album")  or "")):
+                if not it.text(_COL_TITLE).startswith(">> ") or col != _COL_TITLE:
+                    it.setText(col, val)
+                it.setData(col, _SORT_ROLE, str(val).lower())
+            dur = float(t.get("duration") or 0.0)
+            it.setText(_COL_TIME, _fmt_time(dur))
+            it.setData(_COL_TIME, _SORT_ROLE, dur)
 
     def missing_count(self) -> int:
-        return sum(1 for p in self._tracks if not p.exists())
+        return sum(1 for p in self._manual if not p.exists())
 
     def remove_missing(self) -> list[Path]:
         """Explicitly prune rows whose files are gone. Returns the removed paths."""
-        gone = [p for p in self._tracks if not p.exists()]
+        gone = [p for p in self._manual if not p.exists()]
         if not gone:
             return []
         self._snapshot()
         gone_set = set(gone)
-        for i in range(self.count() - 1, -1, -1):
-            if self.item(i).data(Qt.UserRole) in gone_set:
-                self.takeItem(i)
-        self._tracks = [p for p in self._tracks if p not in gone_set]
+        for i in range(self.topLevelItemCount() - 1, -1, -1):
+            if self._path_of(self.topLevelItem(i)) in gone_set:
+                self.takeTopLevelItem(i)
+        self._manual = [p for p in self._manual if p not in gone_set]
+        self._sync_from_items()
+        self._renumber()
         return gone
 
     def _sync_from_items(self):
         self._tracks = [
-            self.item(i).data(Qt.UserRole)
-            for i in range(self.count())
-            if self.item(i).data(Qt.UserRole) is not None
+            self._path_of(self.topLevelItem(i))
+            for i in range(self.topLevelItemCount())
+            if self._path_of(self.topLevelItem(i)) is not None
         ]
 
     def _sync_if_desynced(self):
-        if self.count() != len(self._tracks):
+        if self.topLevelItemCount() != len(self._tracks):
             self._sync_from_items()
+            self._manual = [p for p in self._manual if p in set(self._tracks)]
+            self._renumber()
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -195,69 +342,120 @@ class _PlaylistTab(QListWidget):
                 self.add_paths(audio)
             e.acceptProposedAction()
         else:
-            # internal drag-reorder: keep _tracks in step with the visible rows,
-            # otherwise double-click plays the pre-reorder track at that row
+            # Internal drag-reorder. Keep _tracks in step with the visible rows,
+            # otherwise double-click plays the pre-reorder track at that row, and
+            # take the new arrangement as the dragged order worth saving.
             self._snapshot()
+            was_manual = self.manual_mode()
+            self.setSortingEnabled(False)      # a live sort would undo the drop
             super().dropEvent(e)
+            self.setSortingEnabled(True)
             self._sync_from_items()
+            if was_manual:
+                self._manual = list(self._tracks)
+            self._renumber()
 
     def _snapshot(self):
-        self._history.append(list(self._tracks))
+        self._history.append((list(self._tracks), list(self._manual)))
         if len(self._history) > _MAX_UNDO:
             self._history.pop(0)
 
     def undo(self):
         if not self._history:
             return
-        prev = self._history.pop()
+        tracks, manual = self._history.pop()
         self.clear()
-        self._tracks = prev
+        self._tracks = tracks
+        self._manual = manual
+        self.setSortingEnabled(False)
         for p in self._tracks:
-            self.addItem(self._make_item(p))
+            self.addTopLevelItem(self._make_item(p))
+        self.setSortingEnabled(True)
+        self._renumber()
+        self._request_tags(self._tracks)
 
     def add_paths(self, paths: list[Path]):
-        added = [p for p in paths if p not in self._tracks]
+        added = [p for p in paths if p not in self._manual]
         if added:
             self._snapshot()
+        self.setSortingEnabled(False)
         for p in added:
-            self._tracks.append(p)
-            self.addItem(self._make_item(p))
+            self._manual.append(p)
+            self.addTopLevelItem(self._make_item(p))
+        self.setSortingEnabled(True)
+        self._sync_from_items()
+        self._renumber()
+        self._request_tags(added)
 
     def remove_selected(self):
-        rows = sorted([self.row(i) for i in self.selectedItems()], reverse=True)
+        rows = sorted([self.indexOfTopLevelItem(i) for i in self.selectedItems()],
+                      reverse=True)
         if rows:
             self._snapshot()
         for r in rows:
-            self.takeItem(r)
-            self._tracks.pop(r)
+            gone = self._path_of(self.topLevelItem(r))
+            self.takeTopLevelItem(r)
+            if gone in self._manual:
+                self._manual.remove(gone)
+        self._sync_from_items()
+        self._renumber()
+
+    def remove_at(self, idx: int):
+        """Drop one visible row, keeping the dragged order in step."""
+        gone = self._path_of(self.topLevelItem(idx))
+        self.takeTopLevelItem(idx)
+        if gone in self._manual:
+            self._manual.remove(gone)
+        self._sync_from_items()
+        self._renumber()
+
+    def rename_at(self, idx: int, new_path: Path):
+        """Point one visible row at a file that has just been renamed on disk."""
+        it  = self.topLevelItem(idx)
+        old = self._path_of(it)
+        if it is None:
+            return
+        it.setData(_COL_NUM, Qt.UserRole, new_path)
+        it.setText(_COL_TITLE, new_path.stem)
+        it.setData(_COL_TITLE, _SORT_ROLE, new_path.stem.lower())
+        if old in self._manual:
+            self._manual[self._manual.index(old)] = new_path
+        self._sync_from_items()
 
     def clear_all(self):
-        if self._tracks:
+        if self._manual:
             self._snapshot()
         self.clear()
         self._tracks.clear()
+        self._manual.clear()
 
     def highlight(self, idx: int):
-        for i in range(self.count()):
-            item = self.item(i)
-            txt  = self._tracks[i].stem if i < len(self._tracks) else ""
-            item.setText((">> " + txt) if i == idx else txt)
-            f = item.font()
+        for i in range(self.topLevelItemCount()):
+            item = self.topLevelItem(i)
+            base = item.text(_COL_TITLE).removeprefix(">> ")
+            item.setText(_COL_TITLE, (">> " + base) if i == idx else base)
+            f = item.font(_COL_TITLE)
             f.setBold(i == idx)
-            item.setFont(f)
+            for c in range(len(_COL_LABELS)):
+                item.setFont(c, f)
 
     def paths(self) -> list[Path]:
+        """What is on screen, which is what plays."""
         return list(self._tracks)
+
+    def manual_paths(self) -> list[Path]:
+        """The dragged order, which is what gets written to disk."""
+        return list(self._manual)
 
     def to_m3u(self) -> str:
         lines = ["#EXTM3U"]
-        for p in self._tracks:
+        for p in self._manual:
             lines.append(f"#EXTINF:-1,{p.stem}")
             lines.append(str(p))
         return "\n".join(lines)
 
     def load_m3u(self, text: str):
-        # Missing files are kept (greyed) rather than dropped — dropping them and
+        # Missing files are kept (greyed) rather than dropped. Dropping them and
         # re-saving used to permanently shrink playlists when a drive was unplugged.
         paths = []
         for line in text.splitlines():
@@ -269,7 +467,7 @@ class _PlaylistTab(QListWidget):
         self.add_paths(paths)
 
     def to_json(self) -> str:
-        return json.dumps([str(p) for p in self._tracks], indent=2)
+        return json.dumps([str(p) for p in self._manual], indent=2)
 
     def load_json(self, text: str):
         self.add_paths([Path(s) for s in json.loads(text)])
@@ -356,7 +554,10 @@ class PlaylistPanel(QWidget):
         for i in range(lst.count()):
             item = lst.item(i)
             if i < len(lst._tracks):
-                text = lst._tracks[i].name.lower()
+                # the filename plus whatever the tag columns are showing
+                text = " ".join([lst._tracks[i].name.lower()]
+                                + [item.text(c).lower()
+                                   for c in (_COL_TITLE, _COL_ARTIST, _COL_ALBUM)])
                 item.setHidden(bool(q) and q not in text)
 
     def _current_list(self) -> _PlaylistTab | None:
@@ -430,7 +631,7 @@ class PlaylistPanel(QWidget):
             if isinstance(lst, _PlaylistTab):
                 data.append({
                     "name":  self._tabs.tabText(i),
-                    "paths": [str(p) for p in lst.paths()],
+                    "paths": [str(p) for p in lst.manual_paths()],
                 })
         _SESSION.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -557,8 +758,7 @@ class PlaylistPanel(QWidget):
     def _remove_at(self, idx: int, lst: _PlaylistTab):
         lst._snapshot()
         self._player.remove(idx)
-        lst.takeItem(idx)
-        lst._tracks.pop(idx)
+        lst.remove_at(idx)
 
     def _edit_tags(self, path: Path):
         _TagEditDialog(path, self).exec()
@@ -577,9 +777,7 @@ class PlaylistPanel(QWidget):
             QMessageBox.warning(self, "Rename Failed", str(e))
             return
         # update playlist entry
-        lst._tracks[idx] = new_path
-        lst.item(idx).setText(new_path.stem)
-        lst.item(idx).setData(Qt.UserRole, new_path)
+        lst.rename_at(idx, new_path)
         # update player queue (keeps the dedupe set in sync)
         self._player.rename_track(idx, new_path)
 
