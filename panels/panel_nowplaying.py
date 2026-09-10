@@ -115,7 +115,7 @@ class _ArtLabel(QLabel):
 
         self._accent = None                   # set from the album-art palette
         self._cursor = QPointF(0.0, 0.0)      # pointer, in widget coordinates
-        self._hover  = False
+        self._over_art = False   # pointer is on the art, not just in the widget
         self._glow   = 0.0                    # 0 away, 1 fully lit
         self._off_x  = 0.0
         self._off_y  = 0.0
@@ -147,12 +147,11 @@ class _ArtLabel(QLabel):
 
     # hover
     def enterEvent(self, e):
-        self._hover = True
         self._anim.start()
         super().enterEvent(e)
 
     def leaveEvent(self, e):
-        self._hover = False
+        self._over_art = False
         self._t_off_x = self._t_off_y = 0.0
         self._anim.start()
         super().leaveEvent(e)
@@ -160,35 +159,54 @@ class _ArtLabel(QLabel):
     def mouseMoveEvent(self, e: QMouseEvent):
         pos = e.position() if hasattr(e, "position") else QPointF(e.pos())
         self._cursor = pos
-        W, H = self.width(), self.height()
-        if W > 0 and H > 0:
-            # -0.5 at one edge and +0.5 at the other, the same cx and cy the
-            # site's parallax uses, so the art leans towards the pointer with it
-            cx = pos.x() / W - 0.5
-            cy = pos.y() / H - 0.5
+        x, y, w, h = self._art_rect()
+        # Measured against the art, not the widget around it. Against the widget
+        # the pointer drives the lean while it is still out on the empty margin,
+        # and never reaches the full throw at the art's own edge, which is
+        # exactly where the site's cx and cy reach theirs.
+        inside = (w > 0 and h > 0
+                  and x <= pos.x() <= x + w and y <= pos.y() <= y + h)
+        self._over_art = inside
+        if inside:
+            cx = (pos.x() - x) / w - 0.5
+            cy = (pos.y() - y) / h - 0.5
             self._t_off_x = cx * _ART_LEAN_X
             self._t_off_y = cy * _ART_LEAN_Y
+        else:
+            self._t_off_x = self._t_off_y = 0.0
         if not self._anim.isActive():
             self._anim.start()
         self.update()          # the glow follows the pointer with no easing
         super().mouseMoveEvent(e)
 
     def _step(self):
-        rate = _ART_RATE_IN if self._hover else _ART_RATE_OUT
-        self._glow  = _approach(self._glow, 1.0 if self._hover else 0.0, rate)
-        self._scale = _approach(self._scale, _ART_SCALE if self._hover else 1.0, rate)
+        live = self._over_art
+        rate = _ART_RATE_IN if live else _ART_RATE_OUT
+        self._glow  = _approach(self._glow, 1.0 if live else 0.0, rate)
+        self._scale = _approach(self._scale, _ART_SCALE if live else 1.0, rate)
         self._off_x = _approach(self._off_x, self._t_off_x, rate)
         self._off_y = _approach(self._off_y, self._t_off_y, rate)
-        if not self._hover and self._glow == 0.0 and self._off_x == 0.0 \
+        if not live and self._glow == 0.0 and self._off_x == 0.0 \
                 and self._off_y == 0.0 and self._scale == 1.0:
             self._anim.stop()   # fully back at rest, nothing left to repaint for
         self.update()
 
     def _art_rect(self):
-        """Where the art sits before the hover transform, and how big."""
+        """Where the art is actually drawn: x, y, width, height.
+
+        The widget expands to fill its dock and the art is centred inside it, so
+        the two are rarely the same shape. A cover that is not square is smaller
+        again, since it keeps its aspect.
+        """
         W, H = self.width(), self.height()
         side = min(W, H) - 16
-        return (W - side) // 2, (H - side) // 2, side
+        if side <= 0:
+            return 0, 0, 0, 0
+        if self._scaled is not None and not self._scaled.isNull():
+            w, h = self._scaled.width(), self._scaled.height()
+        else:
+            w = h = side
+        return (W - w) // 2, (H - h) // 2, w, h
 
     def paintEvent(self, _):
         W, H = self.width(), self.height()
