@@ -473,18 +473,41 @@ class MainWindow(QMainWindow):
             # Defer one event loop tick so Qt finishes its initial dock layout
             # before we overwrite it with the saved state.
             QTimer.singleShot(0, self._restore_ui_state)
-            # and another after that, so the cascade runs on the docks as they
-            # finally sit rather than on the layout Qt started with
+            # after the layout is restored, so the overlays size to the real window
             QTimer.singleShot(0, self._start_fx)
 
     def _start_fx(self):
+        """Start the visual extras, each on its own so one cannot take the others.
+
+        AUDIOCRATE_FX chooses which run. Unset is all of them, "0" is none, and
+        otherwise it is a comma separated list of particles, shine and menus.
+        A crash in a paint or event path is not something a try block catches,
+        so this exists to narrow one down without editing anything.
+        """
+        import os
+        want = os.environ.get("AUDIOCRATE_FX", "").strip().lower()
+        if want in ("0", "off", "none"):
+            return
+        on = {w.strip() for w in want.split(",") if w.strip()} or {
+            "particles", "shine", "menus"}
+
         import fx
-        docks = self.findChildren(QDockWidget)
-        fx.stagger_in([d for d in docks if d.isVisible()])
-        self._particles = fx.CursorParticles(self)
-        self._particles.set_accent(self._current_art_palette())
-        self._shine = fx.Shine(self._status_bar)
-        fx.install_menu_warp(QApplication.instance())
+        if "particles" in on:
+            try:
+                self._particles = fx.CursorParticles(self)
+                self._particles.set_accent(self._current_art_palette())
+            except Exception as e:
+                print(f"fx: particles disabled ({e})")
+        if "shine" in on:
+            try:
+                self._shine = fx.Shine(self._status_bar)
+            except Exception as e:
+                print(f"fx: shine disabled ({e})")
+        if "menus" in on:
+            try:
+                fx.install_menu_warp(QApplication.instance())
+            except Exception as e:
+                print(f"fx: menu warp disabled ({e})")
 
     def _show_status(self, msg: str, ms: int = 0):
         self._status_bar.showMessage(msg, ms)

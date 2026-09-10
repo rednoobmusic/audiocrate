@@ -16,7 +16,13 @@ import random
 from PySide6.QtCore import (QEasingCurve, QObject, QEvent, QPointF,
                             QPropertyAnimation, QRect, QTimer, Qt)
 from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QMenu, QWidget
+from PySide6.QtWidgets import QMenu, QWidget
+
+try:
+    from shiboken6 import isValid as _qt_valid
+except ImportError:
+    def _qt_valid(obj) -> bool:
+        return obj is not None
 
 # cubic-bezier(0.34, 1.56, 0.64, 1). OutBack's default overshoot of 1.70158
 # throws further than the site does, so it is dialled back to match.
@@ -30,56 +36,11 @@ def spring(overshoot: float = _OVERSHOOT) -> QEasingCurve:
     return c
 
 
-def _fade(widget: QWidget, start: float, end: float, ms: int, curve=None):
-    """Animate a widget's opacity, keeping the effect alive for the animation."""
-    eff = widget.graphicsEffect()
-    if not isinstance(eff, QGraphicsOpacityEffect):
-        eff = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(eff)
-    eff.setOpacity(start)
-    anim = QPropertyAnimation(eff, b"opacity", widget)
-    anim.setDuration(ms)
-    anim.setStartValue(start)
-    anim.setEndValue(end)
-    anim.setEasingCurve(curve or QEasingCurve(QEasingCurve.OutCubic))
-    # parented to the widget, so it dies with it rather than outliving it
-    anim.start(QPropertyAnimation.DeleteWhenStopped)
-    return anim
-
-
-# entrance
-
-def stagger_in(widgets, first_ms: int = 600, step_ms: int = 50):
-    """Bring a row of panels up one after another, as the site does its windows.
-
-    The site runs rn-enter-win1 through win4 at 600, 650, 700 and 750ms, each
-    lifting its panel from 60px below. The lift is left out here: a dock's
-    geometry belongs to QMainWindow's dock layout, so animating it means being
-    overruled on the next layout pass. Opacity is nobody else's, so the cascade
-    is carried by the fade alone.
-    """
-    anims = []
-    for i, w in enumerate(widgets):
-        if w is None or not w.isVisible():
-            continue
-        anims.append(_delayed_fade(w, first_ms + i * step_ms, i * step_ms))
-    return [a for a in anims if a is not None]
-
-
-def _delayed_fade(widget: QWidget, ms: int, delay_ms: int):
-    eff = QGraphicsOpacityEffect(widget)
-    widget.setGraphicsEffect(eff)
-    eff.setOpacity(0.0)
-    anim = QPropertyAnimation(eff, b"opacity", widget)
-    anim.setDuration(ms)
-    anim.setStartValue(0.0)
-    anim.setEndValue(1.0)
-    anim.setEasingCurve(QEasingCurve(QEasingCurve.OutQuint))
-    # dropping the effect afterwards puts the widget back on the plain paint
-    # path, which matters for the ones that repaint constantly
-    anim.finished.connect(lambda w=widget: w.setGraphicsEffect(None))
-    QTimer.singleShot(delay_ms, lambda: anim.start(QPropertyAnimation.DeleteWhenStopped))
-    return anim
+# The entrance cascade that used to live here is gone. It put a
+# QGraphicsOpacityEffect on every visible dock, and three of them wrap a native
+# surface: Video and Now Playing hold a QVideoWidget, Milkdrop holds a
+# QOpenGLWidget. Qt does not support a graphics effect over any of those and
+# segfaults rather than ignoring it. Nothing below uses QGraphicsEffect at all.
 
 
 # flyouts
@@ -94,7 +55,16 @@ def warp_in(widget: QWidget, ms: int = 180):
     end = widget.geometry()
     if end.isEmpty():
         return None
-    _fade(widget, 0.0, 1.0, ms)
+    # setWindowOpacity, not a graphics effect: a menu is a top level popup, and
+    # an effect on one is both unsupported and a lifetime problem, since the
+    # animation would outlive the object it animates.
+    widget.setWindowOpacity(0.0)
+    fade = QPropertyAnimation(widget, b"windowOpacity", widget)
+    fade.setDuration(ms)
+    fade.setStartValue(0.0)
+    fade.setEndValue(1.0)
+    fade.setEasingCurve(QEasingCurve(QEasingCurve.OutCubic))
+    fade.start(QPropertyAnimation.DeleteWhenStopped)
     cx, cy = end.x(), end.y()          # menus grow from their top corner
     small = QRect(cx, cy, max(1, int(end.width() * 0.86)), max(1, int(end.height() * 0.7)))
     anim = QPropertyAnimation(widget, b"geometry", widget)
@@ -116,8 +86,19 @@ class _MenuWarp(QObject):
 
     def eventFilter(self, obj, ev):
         if ev.type() == QEvent.Show and isinstance(obj, QMenu):
-            QTimer.singleShot(0, lambda m=obj: warp_in(m))
+            QTimer.singleShot(0, lambda m=obj: self._warp(m))
         return False
+
+    @staticmethod
+    def _warp(menu):
+        # A context menu is built fresh per right click and destroyed after, so
+        # the C++ object behind this wrapper may already be gone by now.
+        if not _qt_valid(menu):
+            return
+        try:
+            warp_in(menu)
+        except RuntimeError:
+            pass
 
 
 _menu_warp = _MenuWarp()
