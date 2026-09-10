@@ -473,9 +473,25 @@ class MainWindow(QMainWindow):
             # Defer one event loop tick so Qt finishes its initial dock layout
             # before we overwrite it with the saved state.
             QTimer.singleShot(0, self._restore_ui_state)
+            # and another after that, so the cascade runs on the docks as they
+            # finally sit rather than on the layout Qt started with
+            QTimer.singleShot(0, self._start_fx)
+
+    def _start_fx(self):
+        import fx
+        docks = self.findChildren(QDockWidget)
+        fx.stagger_in([d for d in docks if d.isVisible()])
+        self._particles = fx.CursorParticles(self)
+        self._particles.set_accent(self._current_art_palette())
+        self._shine = fx.Shine(self._status_bar)
+        fx.install_menu_warp(QApplication.instance())
 
     def _show_status(self, msg: str, ms: int = 0):
         self._status_bar.showMessage(msg, ms)
+        # the messages that end in an ellipsis are the ones still working
+        shine = getattr(self, "_shine", None)
+        if shine is not None:
+            shine.start() if msg.rstrip().endswith("\u2026") else shine.stop()
 
     def _visuals_shown(self) -> bool:
         viz = getattr(self, "_viz", None)
@@ -730,6 +746,9 @@ class MainWindow(QMainWindow):
         np = getattr(self, "_np_widget", None)
         if np is not None:
             np.set_accent(palette)
+        parts = getattr(self, "_particles", None)
+        if parts is not None:
+            parts.set_accent(palette)
 
     def _refresh_idle_accents(self):
         """Visualizers/waveform follow the OS highlight only on a *pure* system
