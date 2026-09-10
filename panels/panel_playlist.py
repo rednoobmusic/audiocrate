@@ -22,6 +22,19 @@ _COL_LABELS = ("#", "Title", "Artist", "Album", "Time")
 _SORT_ROLE  = Qt.UserRole + 1     # what a column sorts on, apart from its text
 
 
+def _refused_message(refused: list[Path]) -> str:
+    """Name the count and the suffix, since the suffix is usually the surprise."""
+    n = len(refused)
+    files = f"{n} file" + ("" if n == 1 else "s")
+    suffixes = {p.suffix.lower() for p in refused}
+    if len(suffixes) > 1:
+        return f"Skipped {files} across {len(suffixes)} unrecognised extensions"
+    only = suffixes.pop()
+    if not only:
+        return f"Skipped {files} with no extension"
+    return f"Skipped {files}, unrecognised extension: {only}"
+
+
 def _fmt_time(secs: float) -> str:
     if not secs or secs <= 0:
         return ""
@@ -140,6 +153,7 @@ class _PlaylistTab(QTreeWidget):
     """
 
     play_requested = Signal(int)
+    notify         = Signal(str)         # one-liners for the status bar
     _tags_ready    = Signal(object)      # {Path: tags}, from the reader thread
 
     def __init__(self, parent=None):
@@ -331,7 +345,9 @@ class _PlaylistTab(QTreeWidget):
                 for u in e.mimeData().urls()
                 if QUrl(u).isLocalFile()
             ]
-            audio = [p for p in paths if p.is_file() and p.suffix.lower() in PLAYABLE_EXTS]
+            # files go through as they are so add_paths can report the refusals;
+            # only a folder needs unpacking first
+            audio = [p for p in paths if p.is_file()]
             for p in paths:
                 if p.is_dir():
                     audio.extend(sorted(
@@ -374,8 +390,21 @@ class _PlaylistTab(QTreeWidget):
         self._renumber()
         self._request_tags(self._tracks)
 
-    def add_paths(self, paths: list[Path]):
-        added = [p for p in paths if p not in self._manual]
+    def add_paths(self, paths: list[Path]) -> list[Path]:
+        """Add what can be played and say so when something cannot.
+
+        A file whose suffix is not one we know used to be dropped without a
+        word, so a name like "track.ogg Variation 2", whose suffix is the whole
+        of ".ogg Variation 2", looked exactly like the format not being
+        supported at all.
+        """
+        playable, refused = [], []
+        for p in paths:
+            (playable if p.suffix.lower() in PLAYABLE_EXTS else refused).append(p)
+        if refused:
+            self.notify.emit(_refused_message(refused))
+
+        added = [p for p in playable if p not in self._manual]
         if added:
             self._snapshot()
         self.setSortingEnabled(False)
@@ -386,6 +415,7 @@ class _PlaylistTab(QTreeWidget):
         self._sync_from_items()
         self._renumber()
         self._request_tags(added)
+        return added
 
     def remove_selected(self):
         rows = sorted([self.indexOfTopLevelItem(i) for i in self.selectedItems()],
@@ -567,6 +597,7 @@ class PlaylistPanel(QWidget):
     def _make_tab(self) -> _PlaylistTab:
         lst = _PlaylistTab()
         lst.play_requested.connect(self._on_play_from_tab)
+        lst.notify.connect(self.notify)
         lst.setContextMenuPolicy(Qt.CustomContextMenu)
         lst.customContextMenuRequested.connect(lambda pos, l=lst: self._ctx_menu(pos, l))
         return lst
@@ -650,8 +681,8 @@ class PlaylistPanel(QWidget):
     def add_paths(self, paths: list[Path]):
         lst = self._current_list()
         if lst:
-            lst.add_paths(paths)
-            self._player.add_many(paths)
+            added = lst.add_paths(paths)
+            self._player.add_many(added)
 
     def _undo(self):
         lst = self._current_list()

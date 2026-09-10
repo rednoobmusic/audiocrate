@@ -1356,8 +1356,12 @@ class MainWindow(QMainWindow):
 
     def _add_files(self):
         exts = " ".join(f"*{e}" for e in sorted(PLAYABLE_EXTS))
+        # All Files is offered as well, because the extension filter hides a file
+        # whose name only looks like it has a known suffix. The playlist says so
+        # when it refuses one, which is more use than the file never appearing.
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Add Files", self._last_browse_dir, f"Audio/Video ({exts})"
+            self, "Add Files", self._last_browse_dir,
+            f"Audio/Video ({exts});;All Files (*)"
         )
         if paths:
             self._last_browse_dir = str(Path(paths[0]).parent)
