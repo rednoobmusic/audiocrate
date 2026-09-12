@@ -744,9 +744,41 @@ class PlaylistPanel(QWidget):
         self._tabs.addTab(lst, name)
         self._tabs.setCurrentWidget(lst)
 
+    def _confirm_discard(self, title: str, question: str) -> bool:
+        """Ask before throwing tracks away. True means go ahead.
+
+        No is the default button, so a stray Return, or a double click whose
+        second press lands where the dialog just appeared, does not confirm the
+        thing the dialog exists to prevent.
+        """
+        ans = QMessageBox.question(
+            self, title, question,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return ans == QMessageBox.Yes
+
     def _close_tab(self, idx: int):
-        if self._tabs.count() > 1:
-            self._tabs.removeTab(idx)
+        """Close a playlist tab, asking first if it holds anything.
+
+        Undo lives on the tab: the history is a list on the widget, so closing
+        one takes its own undo away with it. That makes this the one action in
+        the panel with nothing behind it, and the close button sits a few pixels
+        from the tab you were aiming for.
+
+        An empty playlist has nothing to lose, so it closes without a question.
+        """
+        if self._tabs.count() <= 1:
+            return
+        lst = self._tabs.widget(idx)
+        n = len(lst.manual_paths()) if isinstance(lst, _PlaylistTab) else 0
+        if n and not self._confirm_discard(
+                "Close Playlist",
+                f"Close \u201c{self._tabs.tabText(idx)}\u201d and its "
+                f"{n} track{'s' if n != 1 else ''}?\n\n"
+                f"A closed playlist cannot be brought back."):
+            return
+        self._tabs.removeTab(idx)
 
     def _rename_tab(self, idx: int):
         if idx < 0:
@@ -873,10 +905,23 @@ class PlaylistPanel(QWidget):
             lst.remove_selected()
 
     def _clear(self):
+        """Empty the current playlist, asking first if it holds anything.
+
+        Ctrl+Z puts the rows back, since clear_all takes a snapshot, but the
+        button is one click from Remove and empties the whole tab rather than
+        the selection, so it says what it is about to do.
+        """
         lst = self._current_list()
-        if lst:
-            lst.clear_all()
-            self._player.clear()
+        if not lst:
+            return
+        n = len(lst.manual_paths())
+        if n and not self._confirm_discard(
+                "Clear Playlist",
+                f"Remove all {n} track{'s' if n != 1 else ''} from "
+                f"\u201c{self._tabs.tabText(self._tabs.currentIndex())}\u201d?"):
+            return
+        lst.clear_all()
+        self._player.clear()
 
     def restore_selection(self, path: Path):
         for ti in range(self._tabs.count()):
