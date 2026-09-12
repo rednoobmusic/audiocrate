@@ -358,7 +358,13 @@ class DspEngine(QObject):
                 with self._lock:
                     end = self._decoded + nfr
                     if end > len(self._buf):
-                        grow = np.zeros((end - len(self._buf) + _FS, _CH), dtype=np.int16)
+                        # Geometric. A second at a time meant one concatenate
+                        # per second of audio, each allocating the whole new
+                        # buffer and copying the old one in, so a long track
+                        # whose duration was not known copied itself hundreds
+                        # of times and fragmented the heap doing it.
+                        want = max(end + _FS, (len(self._buf) * 3) // 2)
+                        grow = np.zeros((want - len(self._buf), _CH), dtype=np.int16)
                         self._buf = np.concatenate([self._buf, grow])
                     self._buf[self._decoded:end] = block
                     self._decoded = end
@@ -370,6 +376,14 @@ class DspEngine(QObject):
                 self._complete = True
             if self._dur_ms == 0:
                 self._dur_ms = int(self._decoded / _FS * 1000)
+            try:
+                from logs import get, rss_mb
+                get("dsp").debug(
+                    "decoded %.1f s at %d Hz, buffer %.0f MB, process %.0f MB",
+                    self._decoded / _FS, _FS,
+                    self._buf.nbytes / 2 ** 20, rss_mb())
+            except Exception:
+                pass
         except Exception:
             from applog import log
             log.exception("chip stream failed")
@@ -447,7 +461,13 @@ class DspEngine(QObject):
                 with self._lock:
                     end = self._decoded + nfr
                     if end > len(self._buf):
-                        grow = np.zeros((end - len(self._buf) + _FS, _CH), dtype=np.int16)
+                        # Geometric. A second at a time meant one concatenate
+                        # per second of audio, each allocating the whole new
+                        # buffer and copying the old one in, so a long track
+                        # whose duration was not known copied itself hundreds
+                        # of times and fragmented the heap doing it.
+                        want = max(end + _FS, (len(self._buf) * 3) // 2)
+                        grow = np.zeros((want - len(self._buf), _CH), dtype=np.int16)
                         self._buf = np.concatenate([self._buf, grow])
                     self._buf[self._decoded:end] = chunk16
                     self._decoded = end
@@ -466,12 +486,20 @@ class DspEngine(QObject):
                 self._buf = self._buf[:self._decoded]
                 self._total = self._decoded
                 self._complete = True
-                mono = (self._buf[:, 0].astype(np.float32) + self._buf[:, 1].astype(np.float32)) * np.float32(0.5 / 32768.0)
+                # Only the first minute is read, just below, so only the first
+                # minute is converted. Doing the whole track built four full
+                # length float32 arrays to answer a question about sixty
+                # seconds: 176 MB on a 48 kHz device and 703 MB on a 192 kHz
+                # one, allocated in a single statement while the decode buffer,
+                # the visualizers and projectM were all still resident.
+                head = self._buf[: _FS * 60]
+                mono = ((head[:, 0].astype(np.float32) + head[:, 1].astype(np.float32))
+                        * np.float32(0.5 / 32768.0))
             if self._dur_ms == 0:
                 self._dur_ms = int(self._decoded / _FS * 1000)
             # Final peak is already folded into _norm_gain via running_peak above.
             try:
-                self._enh.set_adaptive(high_ratio(mono[: _FS * 60]))
+                self._enh.set_adaptive(high_ratio(mono))
             except Exception:
                 pass
         except Exception:

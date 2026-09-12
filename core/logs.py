@@ -20,7 +20,12 @@ from pathlib import Path
 
 LOG_DIR   = Path.home() / ".config" / "audiocrate"
 CRASH_LOG = LOG_DIR / "crash.log"
-RUN_LOG   = LOG_DIR / "audiocrate.log"
+
+# The log file belongs to applog, which was here first and rotates it. This
+# module adds what applog does not have: colour, a Qt bridge, an excepthook and
+# faulthandler. Writing the same path from here as well, which it did until now,
+# put a RotatingFileHandler and a mode="w" handler on one file.
+_ROOT_NAME = "audiocrate"
 
 # The subsystems worth telling apart at a glance. A logger named for one of
 # these gets its colour, so the eye can group a run without reading it.
@@ -73,7 +78,8 @@ class _Formatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         when = time.strftime("%H:%M:%S", time.localtime(record.created))
         ms   = int(record.msecs)
-        head = record.name.split(".")[0][:9]
+        # the subsystem is the last part: "audiocrate.dsp" colours as dsp
+        head = record.name.rsplit(".", 1)[-1][:9]
         text = record.getMessage()
         if record.exc_info:
             text += "\n" + self.formatException(record.exc_info)
@@ -103,7 +109,7 @@ def _install_qt_bridge() -> None:
     except ImportError:
         return
 
-    log = logging.getLogger("qt")
+    log = get("qt")
     levels = {
         QtMsgType.QtDebugMsg:    logging.DEBUG,
         QtMsgType.QtInfoMsg:     logging.INFO,
@@ -124,7 +130,7 @@ def _install_excepthook() -> None:
     Qt swallows exceptions raised inside slots on some builds, so anything that
     does escape is worth keeping.
     """
-    log = logging.getLogger("ui")
+    log = get("ui")
     previous = sys.excepthook
 
     def hook(exc_type, exc, tb):
@@ -147,26 +153,21 @@ def setup(level: str | None = None) -> logging.Logger:
     name = (level or os.environ.get("AUDIOCRATE_LOG") or "info").upper()
     lvl = getattr(logging, name, logging.INFO)
 
-    root = logging.getLogger()
-    root.setLevel(lvl)
-    for h in list(root.handlers):
-        root.removeHandler(h)
+    # applog's logger, so its rotating file keeps getting everything and there
+    # is one log rather than two fighting over a filename.
+    from applog import log as _applog      # configures the file handler
+    root = logging.getLogger(_ROOT_NAME)
+    root.setLevel(min(lvl, logging.INFO))
 
+    # Replace whatever plain console handler applog put on, keep its file one.
+    for h in list(root.handlers):
+        if isinstance(h, logging.StreamHandler) and not isinstance(
+                h, logging.FileHandler):
+            root.removeHandler(h)
     console = logging.StreamHandler(sys.stderr)
+    console.setLevel(lvl)
     console.setFormatter(_Formatter(_colour_ok(sys.stderr)))
     root.addHandler(console)
-
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        # One run per file rather than an ever growing one. The previous run is
-        # the one you want after a crash, so it is kept alongside.
-        if RUN_LOG.exists():
-            RUN_LOG.replace(RUN_LOG.with_suffix(".log.1"))
-        f = logging.FileHandler(RUN_LOG, mode="w", encoding="utf-8")
-        f.setFormatter(_Formatter(colour=False))
-        root.addHandler(f)
-    except OSError:
-        pass          # a read only home is not worth refusing to start over
 
     # The important part. A segfault prints the Python stack of every thread
     # instead of the one word the shell gives you.
@@ -199,12 +200,29 @@ def setup(level: str | None = None) -> logging.Logger:
     _install_qt_bridge()
     _install_excepthook()
 
-    log = logging.getLogger("ui")
+    log = get("ui")
     where = CRASH_LOG if crash_file else "stderr"
     log.debug("logging at %s, crash traces to %s", name, where)
     return log
 
 
 def get(name: str) -> logging.Logger:
-    """A logger named for a subsystem, which is what picks its colour."""
-    return logging.getLogger(name)
+    """A logger for one subsystem, under applog's, which is what carries it to
+    the file. The last part of the name is what picks its colour."""
+    return logging.getLogger(f"{_ROOT_NAME}.{name}")
+
+
+def rss_mb() -> float:
+    """Resident size in MB, or 0.0 where it cannot be read."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+    except (OSError, ValueError):
+        pass
+    try:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except Exception:
+        return 0.0
