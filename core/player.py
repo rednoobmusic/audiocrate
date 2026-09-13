@@ -24,6 +24,20 @@ _FADE_STEPS    = 2
 _FADE_INTERVAL = 5
 
 
+def device_key(dev: QAudioDevice) -> str:
+    """A QAudioDevice id as something the settings file can hold.
+
+    id() is a QByteArray, and json refuses bytes. It refused the whole file,
+    not just this key, so picking an output device threw away every other
+    setting saved in the same write.
+
+    latin-1 maps each byte to one codepoint and back, so the round trip is
+    lossless whatever Qt puts in there, and a real device id is ASCII, which
+    leaves the file readable.
+    """
+    return dev.id().data().decode("latin-1")
+
+
 def set_fade_params(steps: int, interval_ms: int):
     global _FADE_STEPS, _FADE_INTERVAL
     _FADE_STEPS    = max(1, steps)
@@ -284,7 +298,12 @@ class Player(QObject):
         self._fur = None
         self._fur_active = False
         self._fur_resume_frac = 0.0
-        self._cur_device: QAudioDevice | None = None
+        self._cur_device: QAudioDevice | None = None    # what the user chose
+        # Seeded with what the engines already built themselves on, so the
+        # first unrelated change to the device list (a webcam arriving, say)
+        # is recognised as "already on it" instead of restarting the sink and
+        # announcing a switch that did not happen.
+        self._live_device: QAudioDevice | None = QMediaDevices.defaultAudioOutput()
         try:
             from fur_player import FurPlayer
             self._fur = FurPlayer(parent=self)
@@ -314,18 +333,58 @@ class Player(QObject):
         self._media.positionChanged.connect(self._on_pos)
         self._media.mediaStatusChanged.connect(self._on_status)
 
+        # QMediaDevices only emits from an instance, and the instance has to
+        # outlive the connection, so it is held rather than made on the spot.
+        self._devices = QMediaDevices(self)
+        self._devices.audioOutputsChanged.connect(self._on_devices_changed)
+
     # audio device
 
     def set_video_output(self, widget):
         self._media.setVideoOutput(widget)
 
     def set_audio_device(self, device: QAudioDevice):
+        """The device the user picked. Remembered even while it is unplugged.
+
+        Kept apart from the one actually in use, so unplugging a chosen device
+        falls back to the system default without forgetting the choice, and
+        plugging it back in returns to it.
+        """
         self._cur_device = device
+        self._apply_device(device)
+
+    def _apply_device(self, device: QAudioDevice):
+        """Point every player at an output. Nothing here decides which one."""
+        self._live_device = device
         self._out.setDevice(device)
         self._vgm.set_audio_device(device)
         self._dsp.set_audio_device(device)
         if self._fur is not None:
             self._fur._device = device   # applied on next .fur load
+
+    def _on_devices_changed(self):
+        """Follow the audio hardware as it comes and goes.
+
+        Unplugging the device a sink is writing to raises nothing. The sink
+        stops taking bytes and the feed loop keeps offering them to something
+        that has gone, so playback stalls with no error anywhere, and picking a
+        different device afterwards did not help either: every player still
+        held the handle to the one that left.
+
+        Runs on any change to the list, including ones that are none of our
+        business, so it switches only when the output in use is not there.
+        """
+        live = QMediaDevices.audioOutputs()
+        want = self._cur_device
+        if want is not None and not any(d.id() == want.id() for d in live):
+            want = None                          # the chosen one is gone for now
+        dev = want if want is not None else QMediaDevices.defaultAudioOutput()
+        if dev.isNull():
+            return                               # no outputs at all, nothing to move to
+        if self._live_device is not None and self._live_device.id() == dev.id():
+            return                               # already on it
+        self._apply_device(dev)
+        self.error.emit(f"Audio output changed to {dev.description()}")
 
     def set_normalize(self, on: bool):
         # Applied by the DSP engine at the next track load (matches prior behaviour).

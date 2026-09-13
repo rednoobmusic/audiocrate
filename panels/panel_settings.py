@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtMultimedia import QMediaDevices
 
+from player import device_key
+
 _CFG_FILE = Path.home() / ".config" / "audiocrate" / "settings.json"
 
 # Blank by default — Discord Rich Presence is opt-in, and each user supplies
@@ -509,6 +511,11 @@ class SettingsWidget(QWidget):
         self._audio_combo = QComboBox()
         self._audio_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._populate_audio_devices()
+        # Kept in step with the hardware, or the list still offers a device that
+        # has been unplugged and leaves out one that has just arrived. The
+        # instance has to be held: QMediaDevices does not emit as a class.
+        self._devices = QMediaDevices(self)
+        self._devices.audioOutputsChanged.connect(self._populate_audio_devices)
         self._audio_combo.currentIndexChanged.connect(self._on_audio_device_changed)
         form.addRow("Output device", self._audio_combo)
 
@@ -704,8 +711,9 @@ class SettingsWidget(QWidget):
             None,
         )
         for i, dev in enumerate(QMediaDevices.audioOutputs(), start=1):
-            self._audio_combo.addItem(dev.description(), dev.id().data())
-            if dev.id().data() == saved_id:
+            key = device_key(dev)
+            self._audio_combo.addItem(dev.description(), key)
+            if key == saved_id:
                 select_idx = i
         self._audio_combo.setCurrentIndex(select_idx)
         self._audio_combo.blockSignals(False)
@@ -718,7 +726,7 @@ class SettingsWidget(QWidget):
             self.audio_device_changed.emit(QMediaDevices.defaultAudioOutput())
         else:
             for dev in QMediaDevices.audioOutputs():
-                if dev.id().data() == dev_id:
+                if device_key(dev) == dev_id:
                     self.audio_device_changed.emit(dev)
                     return
 

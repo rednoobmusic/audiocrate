@@ -148,7 +148,24 @@ class VgmPlayer(QObject):
     # public API
 
     def set_audio_device(self, device: QAudioDevice):
+        """Move chiptune playback to another output.
+
+        Goes through stop() and play() rather than swapping the sink in place:
+        stop() already retires the decode thread before tearing the sink down,
+        and getting that order wrong is what freed the emulator under a live
+        render once before. Neither touches the emulator, so playback carries on
+        from where it was.
+
+        When stop() cannot retire the thread it leaves the old sink up and says
+        so in the log. Starting a second sink over that would put two threads on
+        one QIODevice, so in that case the new device waits for the next track.
+        """
         self._device = device
+        if not self._playing:
+            return               # play() builds the next sink from _device
+        self.stop()
+        if self._sink is None:
+            self.play()
 
     @property
     def volume(self) -> float:

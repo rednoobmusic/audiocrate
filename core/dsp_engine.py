@@ -107,6 +107,7 @@ class _AudioFeedWorker(QObject):
         self._io = None
         self._timer: QTimer | None = None
         self.buffered_frames = 0   # read by the engine for position (plain int → GIL-safe)
+        self._last_error = "NoError"   # so a stuck sink logs once, not at 100 Hz
 
     def setup(self):
         """Runs once in the audio thread (connected to QThread.started)."""
@@ -136,6 +137,7 @@ class _AudioFeedWorker(QObject):
         self._sink = None
         self._io = None
         self.buffered_frames = 0
+        self._last_error = "NoError"
 
     def suspend(self):
         if self._sink is not None:
@@ -179,6 +181,16 @@ class _AudioFeedWorker(QObject):
             # backwards ~20 ms every other tick (visibly jittered the scope).
             self.buffered_frames = max(
                 0, (self._sink.bufferSize() - self._sink.bytesFree()) // _FRAME_BYTES)
+            # A sink whose device has gone stops taking bytes and reports it
+            # once, here. bytesFree() then reads 0 forever, which is exactly
+            # what a full buffer looks like, so without this the feed loop
+            # offers audio to something that has gone and says nothing at all.
+            err = self._sink.error().name
+            if err not in ("NoError", "UnderrunError") and err != self._last_error:
+                from applog import log
+                log.warning("audio sink error: %s (device %s)",
+                            err, e._dev.description())
+            self._last_error = err
         except Exception:
             # never let one bad block kill the feed loop (e.g. an EQ edit racing
             # a process() call) — log and try again next tick
@@ -916,10 +928,19 @@ class DspEngine(QObject):
         self._volume = max(0.0, min(1.0, v))
 
     def set_audio_device(self, device: QAudioDevice):
+        """Move playback to another output, whatever state it is in.
+
+        A suspended sink is still bound to the device it was built on, so
+        pausing, choosing a different output and pressing play came back out of
+        the old one. Any sink that exists is torn down here; play() builds the
+        next one from _dev.
+        """
         self._dev = device
-        if self._sink_alive and self.is_playing:
-            pos = self._cursor
-            self._stop_sink()
-            with self._lock:
-                self._cursor = pos
+        if not self._sink_alive:
+            return               # nothing running; the next play() picks it up
+        pos = self._cursor
+        self._stop_sink()
+        with self._lock:
+            self._cursor = pos
+        if self._playing:
             self._start_sink()   # worker builds the new sink from self._dev

@@ -1066,8 +1066,9 @@ class MainWindow(QMainWindow):
         saved_id = s.get("audio_device_id", "")
         if saved_id:
             from PySide6.QtMultimedia import QMediaDevices
+            from player import device_key
             for dev in QMediaDevices.audioOutputs():
-                if dev.id().data() == saved_id:
+                if device_key(dev) == saved_id:
                     self._player.set_audio_device(dev)
                     break
 
