@@ -1062,15 +1062,23 @@ class MainWindow(QMainWindow):
             )
             if self._scrobbler.is_authenticated(_name):
                 self._settings.set_scrobble_status(_svc, True, self._scrobbler.username(_name))
-        # Restore saved audio output device
+        # Restore saved audio output device. Logged either side, because this
+        # is the first thing at startup to touch the audio backend and a crash
+        # in there leaves no Python frame of its own to point at.
         saved_id = s.get("audio_device_id", "")
         if saved_id:
             from PySide6.QtMultimedia import QMediaDevices
             from player import device_key
+            import logs
+            log = logs.get("audio")
             for dev in QMediaDevices.audioOutputs():
                 if device_key(dev) == saved_id:
+                    log.debug("restoring saved output %s", dev.description())
                     self._player.set_audio_device(dev)
+                    log.debug("output restored")
                     break
+            else:
+                log.debug("saved output is not plugged in, staying on the default")
 
     def _on_appearance_changed(self, d: dict):
         self._art_color_on = d.get("art_color_theme", False)

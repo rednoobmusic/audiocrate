@@ -511,11 +511,11 @@ class SettingsWidget(QWidget):
         self._audio_combo = QComboBox()
         self._audio_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._populate_audio_devices()
-        # Kept in step with the hardware, or the list still offers a device that
-        # has been unplugged and leaves out one that has just arrived. The
-        # instance has to be held: QMediaDevices does not emit as a class.
-        self._devices = QMediaDevices(self)
-        self._devices.audioOutputsChanged.connect(self._populate_audio_devices)
+        # No QMediaDevices instance here to keep the list live. Constructing one
+        # starts Qt's PipeWire device monitor, which segfaults inside its own
+        # registry callback on this PySide6. The Refresh button next to the box
+        # re-reads the list, and the player recovers on its own when the output
+        # it is using stops working. See Player._on_device_lost.
         self._audio_combo.currentIndexChanged.connect(self._on_audio_device_changed)
         form.addRow("Output device", self._audio_combo)
 

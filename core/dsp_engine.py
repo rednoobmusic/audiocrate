@@ -99,6 +99,7 @@ class _AudioFeedWorker(QObject):
     the heavy ops, so the GUI thread isn't blocked either way.
     """
     drained = Signal()   # last buffer of a finished track has played out
+    failed  = Signal()   # the sink stopped taking audio (its device is likely gone)
 
     def __init__(self, engine: "DspEngine"):
         super().__init__()
@@ -190,6 +191,7 @@ class _AudioFeedWorker(QObject):
                 from applog import log
                 log.warning("audio sink error: %s (device %s)",
                             err, e._dev.description())
+                self.failed.emit()     # queued to the GUI thread
             self._last_error = err
         except Exception:
             # never let one bad block kill the feed loop (e.g. an EQ edit racing
@@ -203,6 +205,7 @@ class DspEngine(QObject):
     state_changed    = Signal(bool)              # playing?
     finished         = Signal()
     advanced         = Signal(int)               # gapless: now playing this queue index
+    device_lost      = Signal()                  # the sink stopped taking audio
     # queued control → _AudioFeedWorker (all sink calls happen on the audio thread)
     _w_start   = Signal()
     _w_stop    = Signal()
@@ -264,6 +267,10 @@ class DspEngine(QObject):
         self._worker.moveToThread(self._audio_thread)
         self._audio_thread.started.connect(self._worker.setup)
         self._worker.drained.connect(self._finish)          # queued → GUI thread
+        # Re-emitted rather than exposed, so the player does not reach into the
+        # worker. The engine knows its output has stopped working; it does not
+        # know what else is plugged in, so it says so and leaves the choice.
+        self._worker.failed.connect(self.device_lost)       # queued → GUI thread
         self._w_start.connect(self._worker.start_sink)
         self._w_stop.connect(self._worker.stop_sink)
         self._w_suspend.connect(self._worker.suspend)

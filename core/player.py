@@ -14,6 +14,7 @@ import sid_player         # C64 SID via libsidplayfp (scan-then-play, see module
 # so the cause was the .fur streaming path — see _play_idx. Set AUDIOCRATE_SID=0
 # to disable SID.)
 import os as _os
+import time as _time
 SID_ENABLED = _os.environ.get("AUDIOCRATE_SID", "1") != "0"
 _SID_EXTS = sid_player.EXTS if SID_ENABLED else set()
 
@@ -22,6 +23,11 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAud
 
 _FADE_STEPS    = 2
 _FADE_INTERVAL = 5
+
+# Shortest gap between two attempts to move off a failing output. A sink that
+# has lost its device reports the failure on every tick, so without this a
+# replacement that does not work either is rebuilt a hundred times a second.
+_RECOVER_GAP = 5.0
 
 
 def device_key(dev: QAudioDevice) -> str:
@@ -333,10 +339,22 @@ class Player(QObject):
         self._media.positionChanged.connect(self._on_pos)
         self._media.mediaStatusChanged.connect(self._on_status)
 
-        # QMediaDevices only emits from an instance, and the instance has to
-        # outlive the connection, so it is held rather than made on the spot.
-        self._devices = QMediaDevices(self)
-        self._devices.audioOutputsChanged.connect(self._on_devices_changed)
+        # Recovery is driven by the sink failing, not by watching the hardware.
+        #
+        # Constructing a QMediaDevices instance, which is the documented way to
+        # get audioOutputsChanged, starts Qt's PipeWire device monitor. On
+        # PySide6 6.11 with Python 3.14 that monitor segfaulted inside its own
+        # registry callback, on a PipeWire thread, seconds after the window was
+        # up and with nothing playing:
+        #
+        #   pw_proxy_add_object_listener <- libpipewire-module-protocol-native
+        #     <- libQt6Multimedia x4 <- protocol-native <- pw thread loop
+        #
+        # Nothing here can catch that, so the monitor is not started at all.
+        # The engine says when its sink stops taking audio, which is the thing
+        # actually worth knowing, and the outputs are enumerated once, then.
+        self._dsp.device_lost.connect(self._on_device_lost)
+        self._last_recover = 0.0
 
     # audio device
 
@@ -362,8 +380,8 @@ class Player(QObject):
         if self._fur is not None:
             self._fur._device = device   # applied on next .fur load
 
-    def _on_devices_changed(self):
-        """Follow the audio hardware as it comes and goes.
+    def _on_device_lost(self):
+        """The output stopped taking audio. Move to whatever is there now.
 
         Unplugging the device a sink is writing to raises nothing. The sink
         stops taking bytes and the feed loop keeps offering them to something
@@ -371,9 +389,17 @@ class Player(QObject):
         different device afterwards did not help either: every player still
         held the handle to the one that left.
 
-        Runs on any change to the list, including ones that are none of our
-        business, so it switches only when the output in use is not there.
+        Rate limited, because a replacement that does not work either reports
+        the same failure on the next tick and would be rebuilt on every one.
         """
+        now = _time.monotonic()
+        if now - self._last_recover < _RECOVER_GAP:
+            return
+        self._last_recover = now
+        self._recover_device()
+
+    def _recover_device(self):
+        """Point everything at the chosen output, or the default if it has gone."""
         live = QMediaDevices.audioOutputs()
         want = self._cur_device
         if want is not None and not any(d.id() == want.id() for d in live):
