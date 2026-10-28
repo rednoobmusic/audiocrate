@@ -4,18 +4,15 @@ The site does all of this with CSS transitions and keyframes. A Qt widget has
 neither, so each effect here is either an animation driven by the property
 system or something painted by hand on a timer.
 
-The one thing worth carrying across whole is the curve. Nearly every hover and
-flyout on the site eases with cubic-bezier(0.34, 1.56, 0.64, 1), which overshoots
-its target and settles back. That is QEasingCurve.OutBack with a gentler
-overshoot than the default, and it is most of why the site feels the way it does.
+Nearly every hover and flyout on the site eases with
+cubic-bezier(0.34, 1.56, 0.64, 1), which overshoots its target and settles
+back. That is QEasingCurve.OutBack with a gentler overshoot than the default.
 """
 from __future__ import annotations
 
-import random
-
-from PySide6.QtCore import (QEasingCurve, QObject, QEvent, QPointF,
-                            QPropertyAnimation, QRect, QTimer, Qt)
-from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter
+from PySide6.QtCore import (QEasingCurve, QObject, QEvent, QPropertyAnimation,
+                            QRect, QTimer, Qt)
+from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QMenu, QWidget
 
 try:
@@ -36,11 +33,10 @@ def spring(overshoot: float = _OVERSHOOT) -> QEasingCurve:
     return c
 
 
-# The entrance cascade that used to live here is gone. It put a
-# QGraphicsOpacityEffect on every visible dock, and three of them wrap a native
-# surface: Video and Now Playing hold a QVideoWidget, Milkdrop holds a
-# QOpenGLWidget. Qt does not support a graphics effect over any of those and
-# segfaults rather than ignoring it. Nothing below uses QGraphicsEffect at all.
+# Nothing here uses a QGraphicsEffect. Three docks wrap a native surface (Video
+# and Now Playing hold a QVideoWidget, Milkdrop embeds a QOpenGLWindow), and Qt
+# does not support a graphics effect over any of those: it segfaults rather
+# than ignoring it.
 
 
 # flyouts
@@ -49,8 +45,8 @@ def warp_in(widget: QWidget, ms: int = 180):
     """The flyout-in warp, for menus and dropdowns.
 
     The site scales from 0.55 with a tilt. A popup cannot be tilted without
-    rendering it itself, so this keeps the scale and the overshoot and lets the
-    fade stand in for the rotation.
+    rendering it itself, so this grows from 86% of the width and 70% of the
+    height with the same overshoot, and lets the fade stand in for the rotation.
     """
     end = widget.geometry()
     if end.isEmpty():
@@ -166,92 +162,4 @@ class Shine(QWidget):
         for stop, a in ((0.0, 0), (0.5, 90), (1.0, 0)):
             g.setColorAt(stop, QColor(255, 255, 255, a))
         p.fillRect(0, 0, w, h, g)
-        p.end()
-
-
-# cursor particles
-
-class CursorParticles(QWidget):
-    """The site's cursor trail, as a transparent layer over a window.
-
-    The web version listens for mousemove. A transparent overlay never receives
-    those, and child widgets would swallow them anyway, so the pointer is polled
-    instead. That also means the trail carries on over buttons and lists rather
-    than dying wherever a child grabs the mouse.
-    """
-
-    _PER_MOVE = 2          # spawned per frame the pointer actually moved
-    _GRAVITY  = 0.025
-    _MAX      = 400        # a ceiling, in case a frame is dropped mid-sweep
-
-    def __init__(self, parent: QWidget):
-        super().__init__(parent)
-        # No WA_TranslucentBackground here. It is meant for top level windows,
-        # and on a child it can force a native window of its own, which is the
-        # same thing that crashed when an effect met the GL visualizer.
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_NoSystemBackground)
-        self._parts: list[list[float]] = []      # x, y, vx, vy, life, decay, size
-        self._last = QPointF(-1.0, -1.0)
-        self._colour = QColor(255, 255, 255)
-        parent.installEventFilter(self)
-        self.setGeometry(parent.rect())
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start()
-        self.show()
-        self.raise_()
-
-    def set_accent(self, palette: dict | None):
-        if palette:
-            self._colour = QColor(palette.get("accent", palette.get("accent_l", "#ffffff")))
-        else:
-            self._colour = QColor(255, 255, 255)
-
-    def eventFilter(self, obj, ev):
-        if obj is self.parent() and ev.type() == QEvent.Resize:
-            self.setGeometry(obj.rect())
-        return False
-
-    def _tick(self):
-        pos = self.mapFromGlobal(QCursor.pos())
-        inside = self.rect().contains(pos)
-        moved = (abs(pos.x() - self._last.x()) + abs(pos.y() - self._last.y())) > 0.5
-        if inside and moved and len(self._parts) < self._MAX:
-            for _ in range(self._PER_MOVE):
-                self._parts.append([
-                    float(pos.x()), float(pos.y()),
-                    (random.random() - 0.5) * 1.2,
-                    (random.random() - 0.5) * 1.2 - 0.4,
-                    1.0,
-                    0.038 + random.random() * 0.025,
-                    1.2 + random.random() * 1.6,
-                ])
-        self._last = QPointF(pos)
-
-        alive = []
-        for q in self._parts:
-            q[0] += q[2]
-            q[1] += q[3]
-            q[3] += self._GRAVITY
-            q[4] -= q[5]
-            if q[4] > 0.0:
-                alive.append(q)
-        self._parts = alive
-        if self._parts or moved:
-            self.update()
-
-    def paintEvent(self, _):
-        if not self._parts:
-            return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        c = QColor(self._colour)
-        for x, y, _vx, _vy, life, _decay, size in self._parts:
-            c.setAlphaF(max(0.0, min(1.0, life * 0.55)))
-            p.setBrush(c)
-            r = max(size * life, 0.3)
-            p.drawEllipse(QPointF(x, y), r, r)
         p.end()

@@ -1,11 +1,10 @@
 """Shared "has this track actually been listened to" logic.
 
-Both scrobbling and local play-stats need the same answer to "did the user
-really play this track, or just glance at it" — the standard rule (matching
-Last.fm and fooyin's PlaybackProgressTracker) is 50% of the track's duration,
-capped at 4 minutes, whichever comes first. Forward jumps larger than a
-normal position tick are treated as seeks and excluded from listened time, so
-scrubbing through a track doesn't fake a full play.
+Scrobbling and local play stats both need to know whether the user really played a track or just
+glanced at it. The standard rule, which matches Last.fm and fooyin's PlaybackProgressTracker, is
+50% of the track's duration or 4 minutes, whichever comes first. Forward jumps larger than a normal
+position tick count as seeks and are left out of the listened time, so scrubbing through a track
+does not fake a full play.
 """
 from __future__ import annotations
 
@@ -19,9 +18,9 @@ class PlayedThresholdTracker:
     """One instance per "listening session" (reset on every track change).
     Feed it position updates; it reports the moment the played threshold is
     first crossed (exactly once per session) and, on every call, how many ms
-    of real forward playback that update represents (0 for a seek jump) — so
-    a caller wanting a continuously-accumulating total isn't limited to
-    threshold-gated tracks the way the scrobble-trigger use is."""
+    of real forward playback that update represents (0 for a seek jump), so
+    a caller that wants a running total is not limited to threshold-gated
+    tracks the way the scrobble trigger is."""
 
     def __init__(self):
         self._listened_ms = 0
@@ -42,7 +41,7 @@ class PlayedThresholdTracker:
         return self._listened_ms
 
     def update(self, pos_ms: int, dur_ms: int) -> tuple[bool, int]:
-        """Feed a position update. Returns (just_crossed_threshold, delta_ms) —
+        """Feed a position update. Returns (just_crossed_threshold, delta_ms).
         just_crossed_threshold is True exactly once, on the update where the
         played threshold is first reached; delta_ms is the real forward
         playback this update represents (0 if it looked like a seek)."""

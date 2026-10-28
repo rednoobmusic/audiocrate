@@ -22,7 +22,7 @@ export function MiniPlayer() {
         <Art path={state.path} artKey={state.art} />
         <div className="ac-mini-text">
           <div className="ac-mini-title">{state.title}</div>
-          <div className="ac-mini-sub">{state.artist || state.album || '—'}</div>
+          <div className="ac-mini-sub">{state.artist || state.album || ''}</div>
         </div>
         <button
           aria-label={state.playing ? 'Pause' : 'Play'}

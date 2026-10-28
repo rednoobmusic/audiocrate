@@ -1,9 +1,8 @@
 """Readable logs, and a crash that says what it was doing.
 
-A segfault in a Qt application prints "Segmentation fault" and nothing else,
-which is true and useless. faulthandler is in the standard library and turns
-that into the Python stack of every thread at the moment it died, which is the
-difference between a guess and a fix.
+A segfault in a Qt application prints "Segmentation fault" and nothing else.
+faulthandler, from the standard library, turns that into the Python stack of
+every thread at the moment it died.
 
 Everything here is stdlib. Colour goes to a terminal and never to a file or a
 pipe, so a redirected log stays plain text.
@@ -21,10 +20,10 @@ from pathlib import Path
 LOG_DIR   = Path.home() / ".config" / "audiocrate"
 CRASH_LOG = LOG_DIR / "crash.log"
 
-# The log file belongs to applog, which was here first and rotates it. This
-# module adds what applog does not have: colour, a Qt bridge, an excepthook and
-# faulthandler. Writing the same path from here as well, which it did until now,
-# put a RotatingFileHandler and a mode="w" handler on one file.
+# The log file belongs to applog, which rotates it. This module adds what applog
+# does not have: colour, a Qt bridge, an excepthook and faulthandler. It must not
+# write that path too, or a RotatingFileHandler and a mode="w" handler would
+# share one file.
 _ROOT_NAME = "audiocrate"
 
 # The subsystems worth telling apart at a glance. A logger named for one of
@@ -81,6 +80,8 @@ class _Formatter(logging.Formatter):
         # the subsystem is the last part: "audiocrate.dsp" colours as dsp
         head = record.name.rsplit(".", 1)[-1][:9]
         text = record.getMessage()
+        if record.threadName != "MainThread":
+            text = f"[{record.threadName}] {text}"
         if record.exc_info:
             text += "\n" + self.formatException(record.exc_info)
 
@@ -90,8 +91,7 @@ class _Formatter(logging.Formatter):
 
         lc = _LEVEL_COLOUR.get(record.levelno, "")
         sc = _SUBSYSTEMS.get(head, "")
-        # INFO has no colour of its own, so it gets no escape at all rather
-        # than an opening code it never opened and a reset for nothing.
+        # INFO has no colour, so it gets no escape codes at all
         level = f"{lc}{record.levelname:<8}{_RESET}" if lc else f"{record.levelname:<8}"
         body  = f"{lc}{text}{_RESET}" if lc else text
         return (f"{_DIM}{stamp}{_RESET}  {level} "
@@ -158,6 +158,8 @@ def setup(level: str | None = None) -> logging.Logger:
     from applog import log as _applog      # configures the file handler
     root = logging.getLogger(_ROOT_NAME)
     root.setLevel(min(lvl, logging.INFO))
+    import applog
+    applog.set_detailed(lvl <= logging.DEBUG)
 
     # Replace whatever plain console handler applog put on, keep its file one.
     for h in list(root.handlers):
@@ -169,9 +171,6 @@ def setup(level: str | None = None) -> logging.Logger:
     console.setFormatter(_Formatter(_colour_ok(sys.stderr)))
     root.addHandler(console)
 
-    # The important part. A segfault prints the Python stack of every thread
-    # instead of the one word the shell gives you.
-    #
     # faulthandler takes one destination, not several, so the choice is between
     # the terminal and a file. A terminal gets it directly, since that is where
     # you are already looking. Started from a desktop entry there is no terminal
@@ -188,8 +187,8 @@ def setup(level: str | None = None) -> logging.Logger:
     faulthandler.enable(file=crash_file or sys.stderr, all_threads=True)
 
     # SIGUSR1 dumps every thread without killing anything, which is what you
-    # want when it has not crashed but has stopped responding:
-    #     kill -USR1 $(pgrep -f 'python.*main.py')
+    # want when it has not crashed but has stopped responding. diag.install()
+    # takes this over and writes numbered files next to a state snapshot.
     if hasattr(signal, "SIGUSR1"):
         try:
             faulthandler.register(signal.SIGUSR1,

@@ -1,12 +1,5 @@
-"""Make the grouped source folders importable with flat module names.
-
-The source is organised into folders for navigation (core/, panels/,
-integrations/, ui/), but modules still import each other by plain name
-(`from player import ...`). Importing this module first puts those folders on
-sys.path so the flat imports keep resolving — no per-module package prefixes.
-
-main.py imports this before anything else; tests/tools can do the same.
-"""
+"""Put core/, panels/, integrations/ and ui/ on sys.path so modules can import each other by flat name
+(`from player import ...`). main.py imports this first; the check scripts do the same."""
 from __future__ import annotations
 
 import sys

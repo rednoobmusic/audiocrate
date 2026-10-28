@@ -1,9 +1,7 @@
-"""fur_player.py — .fur module playback via libfurnace_wrap.so
+"""Playback and rendering of .fur modules through libfurnace_wrap.so.
 
-Exposes:
-  FurPlayer  – QObject, drives QAudioSink from a render thread
-  fur_tags   – extract title/artist/system for player.py Track
-  FUR_EXTS   – set of supported extensions
+FurPlayer is a QObject that drives a QAudioSink from a render thread, fur_tags reads title, artist and
+system for a player.py Track, and FUR_EXTS is the set of supported extensions.
 """
 from __future__ import annotations
 
@@ -139,18 +137,17 @@ def _wire():
 _wire()
 
 
-# global engine Python-side lock
-# The C++ g_meta_mutex serializes calls at the C++ level, but Python threads
-# release the GIL for ctypes calls and can interleave in ways that cause the
-# C++ allocator to see concurrent heap operations even with the C mutex held.
-# This Python-level RLock ensures only one thread ever enters any global-engine
-# C function at a time, from Python's perspective.
+# global engine lock
+# The C++ g_meta_mutex serializes calls on the C++ side, but ctypes calls release
+# the GIL, so Python threads can still interleave in ways that make the C++
+# allocator see concurrent heap operations with the mutex held. This RLock lets
+# only one thread at a time into any global-engine C function.
 _global_engine_lock = threading.RLock()
 
-# fur_tags() reads metadata by loading the module into the SAME singleton engine
+# fur_tags() reads metadata by loading the module into the same singleton engine
 # a live stream is pulling from, which would swap the song out from under
-# playback. Tags never change for a given file, so cache them and — while a
-# stream is running — answer from the cache rather than touching the engine.
+# playback. Tags never change for a given file, so they are cached, and while a
+# stream is running they are answered from the cache without touching the engine.
 _TAG_CACHE: dict = {}
 _TAG_LOCK = threading.Lock()
 _stream_busy = False
@@ -230,14 +227,12 @@ _CHUNK      = 1024          # frames per render call
 _LOOPS      = 1             # single pass; Player controls repeat policy
 _WF_LOOPS   = 1             # waveform pre-render: single pass for speed
 _RATE       = 44100         # fallback; actual rate read from engine after load
-_WF_EMIT_EVERY = 4          # emit waveform_chunk every N render chunks (~90ms) — smooth scope
+_WF_EMIT_EVERY = 4          # emit waveform_chunk every N render chunks (~90 ms), for a smooth scope
 
 
 class FurPlayer(QObject):
-    """
-    Plays a single .fur file.  Renders audio on a dedicated thread and pushes
-    it to a QAudioSink.  Emits position_changed(frac, ms, dur_ms) at ~10 Hz.
-    """
+    """Plays a single .fur file: renders on a dedicated thread, pushes the audio to a QAudioSink and emits
+    position_changed(frac, ms, dur_ms) at about 10 Hz."""
 
     loaded           = Signal(dict)              # metadata dict from fur_tags
     finished         = Signal()                  # looping done / stopped
@@ -248,24 +243,23 @@ class FurPlayer(QObject):
     def __init__(self, audio_device: QAudioDevice | None = None, parent=None):
         super().__init__(parent)
         if _lib is None:
-            raise RuntimeError("libfurnace_wrap.so not found — cannot play .fur files")
+            raise RuntimeError("libfurnace_wrap.so not found, so .fur files cannot be played")
 
-        # DivEngine keeps its chip-definition table in a *static* array
+        # DivEngine keeps its chip-definition table in a static array
         # (engine.h: `static DivSysDef* sysDefs[]`) but tracks registration with
         # a per-instance flag, and its constructor memsets that shared table.
-        # So constructing a second DivEngine wipes the first one's registrations
-        # and leaves pointers that get freed twice — the intermittent
-        # "free(): invalid pointer" during .fur playback. The wrapper already
-        # keeps a global singleton engine for fw_read_meta_path/fw_render_wav_path,
-        # so this instance engine is a *second* one. Create it lazily: nothing
-        # uses native playback any more (.fur renders through the DSP engine),
-        # so in practice it is never created and only one engine ever exists.
+        # Constructing a second DivEngine wipes the first one's registrations
+        # and leaves pointers that get freed twice, which showed up as an
+        # intermittent "free(): invalid pointer" during .fur playback. The wrapper
+        # already keeps a global singleton engine for fw_read_meta_path and
+        # fw_render_wav_path, so this instance engine would be a second one. It is
+        # created lazily: .fur files render through the DSP engine and nothing uses
+        # native playback, so in practice it is never created.
         self.__handle = None
         self._meta: dict      = {}
         self._duration_us: int = 0
         self._device   = audio_device
 
-        # Render state
         self._render_stop   = threading.Event()
         self._render_thread: threading.Thread | None = None
         self._rendered_frames = 0          # total frames output since play()
@@ -274,7 +268,6 @@ class FurPlayer(QObject):
         self._stream_gen = 0      # retires superseded stream readers
         self._flush_after_seek = False
 
-        # Position timer
         self._pos_timer = QTimer(self)
         self._pos_timer.setInterval(100)
         self._pos_timer.timeout.connect(self._emit_position)
@@ -298,9 +291,8 @@ class FurPlayer(QObject):
                 target_rate = int(pf.sampleRate())
             if target_rate <= 0:
                 target_rate = 48000
-            if target_rate > 0:
-                with self._engine_lock:
-                    _lib.fw_set_sample_rate(self._handle, int(target_rate))
+            with self._engine_lock:
+                _lib.fw_set_sample_rate(self._handle, int(target_rate))
         except Exception:
             pass
         info = _FurnaceInfo()
@@ -364,7 +356,7 @@ class FurPlayer(QObject):
             target=self._render_loop, daemon=True
         )
         self._render_thread.start()
-        # QTimer must be started from the Qt (main) thread — use a queued invoke
+        # a QTimer must be started from the Qt (main) thread, hence the queued invoke
         from PySide6.QtCore import QMetaObject, Qt
         QMetaObject.invokeMethod(self._pos_timer, "start", Qt.QueuedConnection)
 
@@ -499,7 +491,7 @@ class FurPlayer(QObject):
             self.error.emit("QAudioSink failed to open for .fur playback")
             return
 
-        # Allocate interleaved float buffer: CHUNK frames × 2 channels
+        # interleaved stereo float buffer, _CHUNK frames
         FloatArr = ctypes.c_float * (_CHUNK * 2)
         buf = FloatArr()
 
@@ -535,11 +527,10 @@ class FurPlayer(QObject):
                         frames_so_far = self._rendered_frames
                     self.waveform_chunk.emit(frames_so_far, total_frames, self._rate, pcm_blob)
 
-                # Convert to bytes and write to sink
                 if self._flush_after_seek:
                     with self._lock:
                         self._flush_after_seek = False
-                    # reset() destroys the QIODevice — must re-open with start()
+                    # reset() destroys the QIODevice, so it has to be opened again with start()
                     try:
                         sink.reset()
                         new_dev = sink.start()
@@ -547,6 +538,7 @@ class FurPlayer(QObject):
                             dev = new_dev
                     except Exception:
                         pass
+                # the sink takes only what it has room for, so write until the block is in
                 written = 0
                 total = len(raw)
                 while written < total and not self._render_stop.is_set():
@@ -571,15 +563,15 @@ class FurPlayer(QObject):
         """A chunk-at-a-time reader for DspEngine.load_stream().
 
         Rendering a module to a WAV before playing it costs a second or more for
-        anything long (emulation runs 20-44x realtime). The engine can be pulled
-        incrementally instead, so playback starts on the first chunk — measured
-        ~35 ms to audio versus seconds.
+        anything long (emulation runs 20-44x realtime). Pulling the engine
+        incrementally starts playback on the first chunk, measured at about 35 ms
+        to audio against seconds.
 
-        Runs on the wrapper's SINGLETON engine. That is not an implementation
-        detail: DivEngine stores chip definitions in a static array but registers
-        them per instance and memsets that array in its constructor, so a second
-        DivEngine anywhere in the process corrupts the first and crashes with
-        "free(): invalid pointer". Never give a stream its own handle.
+        Runs on the wrapper's singleton engine and has to stay there: DivEngine
+        stores chip definitions in a static array but registers them per instance
+        and memsets that array in its constructor, so a second DivEngine anywhere
+        in the process corrupts the first and crashes with "free(): invalid
+        pointer". Never give a stream its own handle.
 
         Returns (reader, duration_ms) or (None, 0) if the module won't load.
         """
@@ -625,13 +617,12 @@ class FurPlayer(QObject):
         return _read, dur_ms
 
     def render_cached(self, path: Path, cancel: threading.Event | None = None) -> str | None:
-        """Full-song render, cached on disk by (path, mtime, size) so repeat
-        plays are instant. Shares the chiptune render cache with cli_render.
+        """Full-song render, cached on disk by (path, mtime, size) so repeat plays are instant. Shares the
+        chiptune render cache with cli_render.
 
-        `cancel` aborts a render in progress. Rendering holds an exclusive lock,
-        so an abandoned render (the user clicked past it) would otherwise make
-        every later one queue behind it — clicking through a playlist of modules
-        ends up waiting for renders nobody wants any more.
+        `cancel` aborts a render in progress. Rendering holds an exclusive lock, so an abandoned render
+        (the user clicked past it) would otherwise make every later one queue behind it, and clicking
+        through a playlist of modules would wait for renders nobody wants any more.
         """
         import hashlib
         cache = Path.home() / ".cache" / "audiocrate" / "chiprender"
@@ -649,7 +640,7 @@ class FurPlayer(QObject):
         try:
             cache.mkdir(parents=True, exist_ok=True)
             # shutil.move, not Path.replace: the render lands in /tmp (tmpfs) and
-            # the cache is on disk — a rename across devices fails.
+            # the cache is on disk, and a rename across devices fails.
             import shutil
             shutil.move(wav, out)
             from native_lock import prune_cache
@@ -658,15 +649,10 @@ class FurPlayer(QObject):
         except OSError:
             return wav      # fall back to the temp file if the cache isn't writable
 
-    def render_region_wav(self, path: Path, seek_frac: float = 0.0,
-                           radius_s: float = 30.0,
-                           cancel: threading.Event | None = None) -> str | None:
-        """
-        Render the full song (_LOOPS passes) into a temp WAV using the global
-        singleton engine (fw_render_wav_path) — same engine as fur_tags, so
-        there is never a third DivEngine instance in the process.
-        Returns the temp file path, or None on failure/cancel.
-        """
+    def render_region_wav(self, path: Path, cancel: threading.Event | None = None) -> str | None:
+        """Render the full song (_WF_LOOPS passes) into a temp WAV on the global singleton engine
+        (fw_render_wav_path), the same one fur_tags uses, so the process never has a third DivEngine.
+        Returns the temp file path, or None on failure or cancel."""
         if _lib is None:
             return None
         try:

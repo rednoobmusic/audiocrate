@@ -8,16 +8,18 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
+from artists import join_artists, split_artists
 from player import Player
 
-# Editable tag fields (display label → mutagen "easy" key).
+# Editable tag fields: display label and mutagen "easy" key.
 _EDITABLE = [
-    ("Title", "title"), ("Artist", "artist"), ("Album Artist", "albumartist"),
+    ("Title", "title"), ("Artist", "artist"), ("Album artist", "albumartist"),
     ("Album", "album"), ("Year", "date"), ("Genre", "genre"),
     ("Track", "tracknumber"), ("Disc", "discnumber"), ("Composer", "composer"),
     ("BPM", "bpm"), ("Comment", "comment"),
 ]
-_READONLY = ["Duration", "Bitrate", "Sample Rate", "Channels", "Format", "File Size"]
+_READONLY = ["Game", "System", "Copyright", "Dumper", "Tracks", "Sub-songs", "Chips / channels",
+             "Duration", "Bitrate", "Sample rate", "Channels", "Format", "File size", "Lyrics tag"]
 
 
 def _fmt_duration(secs: float) -> str:
@@ -27,10 +29,22 @@ def _fmt_duration(secs: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _id3_version(fe, path: Path) -> tuple | None:
+    """The version of the ID3 tag of an MP3 file, None for any other kind of file."""
+    from mutagen.mp3 import EasyMP3
+    if not isinstance(fe, EasyMP3):
+        return None
+    from mutagen.id3 import ID3
+    try:
+        return ID3(str(path)).version
+    except Exception:
+        return None
+
+
 def _read_metadata(path: Path) -> dict:
     result: dict[str, str] = {}
     if path.suffix.lower() == ".fur":
-        # mutagen can't read Furnace modules — use the libfurnace metadata reader.
+        # mutagen can't read Furnace modules, so use the libfurnace metadata reader.
         try:
             from fur_player import fur_tags
             t = fur_tags(path)
@@ -44,14 +58,14 @@ def _read_metadata(path: Path) -> dict:
             if t.get("duration_us"):
                 result["Duration"] = _fmt_duration(t["duration_us"] / 1_000_000)
             if names := t.get("channel_names"):
-                result["Chips / Channels"] = ", ".join(names)
+                result["Chips / channels"] = ", ".join(names)
             result["Format"] = "Furnace module (.fur)"
-            result["File Size"] = f"{path.stat().st_size // 1024:,} KB"
+            result["File size"] = f"{path.stat().st_size // 1024:,} KB"
         except Exception:
             pass
         return result
     if path.suffix.lower() in {".vgm", ".vgz", ".nsf", ".spc", ".gbs", ".ay", ".gym", ".hes", ".kss", ".sap"}:
-        # chiptune formats — mutagen can't read them; use libgme.
+        # chiptune formats: mutagen can't read them, so use libgme.
         try:
             from vgm_player import gme_tags
             t = gme_tags(path)
@@ -65,14 +79,13 @@ def _read_metadata(path: Path) -> dict:
             if t.get("length_ms", 0) > 0:
                 result["Duration"] = _fmt_duration(t["length_ms"] / 1000)
             result["Format"] = path.suffix[1:].upper() + " (chiptune)"
-            result["File Size"] = f"{path.stat().st_size // 1024:,} KB"
+            result["File size"] = f"{path.stat().st_size // 1024:,} KB"
         except Exception:
             pass
         return result
     try:
         from mutagen import File as MFile
 
-        # info
         f = MFile(str(path))
         if f is None:
             return result
@@ -80,19 +93,18 @@ def _read_metadata(path: Path) -> dict:
         info = f.info
         if getattr(info, "length",      None): result["Duration"]    = _fmt_duration(info.length)
         if getattr(info, "bitrate",     None): result["Bitrate"]     = f"{info.bitrate // 1000} kbps"
-        if getattr(info, "sample_rate", None): result["Sample Rate"] = f"{info.sample_rate} Hz"
+        if getattr(info, "sample_rate", None): result["Sample rate"] = f"{info.sample_rate} Hz"
         if getattr(info, "channels",    None): result["Channels"]    = str(info.channels)
 
         result["Format"]    = type(f).__name__.replace("Easy", "")
-        result["File Size"] = f"{path.stat().st_size // 1024:,} KB"
+        result["File size"] = f"{path.stat().st_size // 1024:,} KB"
 
-        # tags
         fe = MFile(str(path), easy=True)
         if fe:
             for key, label in [
                 ("title",        "Title"),
                 ("artist",       "Artist"),
-                ("albumartist",  "Album Artist"),
+                ("albumartist",  "Album artist"),
                 ("album",        "Album"),
                 ("date",         "Year"),
                 ("genre",        "Genre"),
@@ -100,10 +112,13 @@ def _read_metadata(path: Path) -> dict:
                 ("discnumber",   "Disc"),
                 ("composer",     "Composer"),
                 ("comment",      "Comment"),
-                ("lyrics",       "Lyrics Tag"),
+                ("lyrics",       "Lyrics tag"),
                 ("bpm",          "BPM"),
             ]:
                 val = fe.get(key)
+                if key == "artist":       # every artist, however the tag keeps them
+                    names = split_artists([str(v) for v in val or ()], str((fe.get("albumartist") or [""])[0]))
+                    val = ["; ".join(names)] if names else None
                 if val:
                     result[label] = str(val[0])
     except Exception:
@@ -119,12 +134,11 @@ class MetadataWidget(QWidget):
         super().__init__(parent)
         self._player = player
         self._path: Path | None = None
+        self._artist0 = ""             # the artist line as it was loaded, to see whether it was edited
         self._edits: dict[str, QLineEdit] = {}
         self._build()
         self._data_ready.connect(self._apply)
         player.track_changed.connect(lambda t: self._load(t.path))
-
-    # layout
 
     def _build(self):
         outer = QVBoxLayout(self)
@@ -146,7 +160,7 @@ class MetadataWidget(QWidget):
         self._placeholder = QLabel("No track loaded")
         self._placeholder.setAlignment(Qt.AlignCenter)
 
-        # Save / Revert row (persistent — lives outside the form that gets rebuilt).
+        # Save and revert row. It sits outside the form, which is rebuilt on every load.
         self._btn_row = QWidget()
         brow = QHBoxLayout(self._btn_row)
         brow.setContentsMargins(8, 4, 8, 8)
@@ -162,8 +176,6 @@ class MetadataWidget(QWidget):
         outer.addWidget(self._btn_row)
         self._scroll.hide()
         self._btn_row.hide()
-
-    # data
 
     def _load(self, path: Path):
         self._path = path
@@ -187,20 +199,34 @@ class MetadataWidget(QWidget):
         self._scroll.show()
         self._btn_row.show()
 
+        self._artist0 = data.get("Artist", "")
         # editable tag fields (shown even when empty so missing tags can be added)
         for label, key in _EDITABLE:
             le = QLineEdit(data.get(label, ""))
-            le.setPlaceholderText("—")
             self._form.addRow(label + ":", le)
             self._edits[key] = le
 
-        # read-only technical info
         for label in _READONLY:
             if label in data:
                 lbl = QLabel(data[label])
                 lbl.setWordWrap(True)
                 lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 self._form.addRow(label + ":", lbl)
+
+    def _artist_names(self) -> list[str]:
+        return [n.strip() for n in self._edits["artist"].text().split(";") if n.strip()]
+
+    @staticmethod
+    def _write_artists(fe, names: list[str], several: bool):
+        """Several artists go in as separate values where the tag can hold them (several is False for ID3v2.3,
+        which has no such thing), otherwise as one line with ";" between the names."""
+        if not names:
+            if "artist" in fe:
+                del fe["artist"]
+        elif several and len(names) > 1:
+            fe["artist"] = names
+        else:
+            fe["artist"] = "; ".join(names)
 
     def _save_tags(self):
         if not self._path:
@@ -212,18 +238,26 @@ class MetadataWidget(QWidget):
                 QMessageBox.warning(self, "Can't edit tags",
                                     "This file type doesn't support editable tags.")
                 return
+            ver = _id3_version(fe, self._path)
+            v23 = ver is not None and ver < (2, 4, 0)
             for key, le in self._edits.items():
                 v = le.text().strip()
-                if v:
+                if key == "artist":
+                    if v != self._artist0:       # an untouched line leaves the file's own values alone
+                        self._write_artists(fe, self._artist_names(), not v23)
+                elif v:
                     fe[key] = v
                 elif key in fe:
                     del fe[key]
-            fe.save()
+            if v23:
+                fe.save(v2_version=3)       # the default would turn the file's ID3v2.3 tag into v2.4
+            else:
+                fe.save()
         except Exception as e:
             QMessageBox.warning(self, "Save failed", str(e))
             return
 
-        # Invalidate the tag cache and update the live queue entry, then reload.
+        # the library cache and the live queue entries must not keep the old tags
         try:
             import library_cache
             library_cache.forget(self._path)
@@ -232,7 +266,8 @@ class MetadataWidget(QWidget):
         for t in self._player.queue:
             if t.path == self._path:
                 t.title  = self._edits["title"].text().strip() or self._path.stem
-                t.artist = self._edits["artist"].text().strip()
+                t.artists = self._artist_names()
+                t.artist = join_artists(t.artists)
                 t.album  = self._edits["album"].text().strip()
         self.tags_saved.emit(self._path)
         self._load(self._path)

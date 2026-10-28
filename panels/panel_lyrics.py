@@ -13,6 +13,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui  import QFont, QColor, QPainter, QFontMetrics
 
 from player import Player
+from steady_label import SteadyLabel
 
 try:
     from shiboken6 import isValid as _qt_valid
@@ -140,8 +141,8 @@ def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
 def _target_color(dist: int, palette, synced: bool) -> QColor:
     if not synced or dist == 0:
         return palette.text().color()
-    # Lerp from full text colour toward the window background — fully opaque so
-    # text never goes transparent and disappears against the backdrop.
+    # Lerp from the text colour toward the window colour. Kept fully opaque so
+    # far lines never fade into the backdrop.
     fg  = palette.text().color()
     bg  = palette.window().color()
     # blend factors per distance: 1=30%, 2=50%, 3=65%, 4+=75% toward bg
@@ -375,7 +376,8 @@ class LyricsWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._no_lyr = QLabel("No lyrics")
+        self._no_lyr = SteadyLabel()          # its text changes with the search, which must not change the panel's size
+        self._no_lyr.setText("No lyrics")
         self._no_lyr.setAlignment(Qt.AlignCenter)
         self._no_lyr.setStyleSheet("font-style: italic;")
         root.addWidget(self._no_lyr, 1)
@@ -437,13 +439,15 @@ class LyricsWidget(QWidget):
             self._lyrics_ready.emit(result, err)
 
     def _fetch_online(self, path: Path) -> tuple[list, str | None]:
-        """No local/embedded lyrics → try LRCLIB (cached, runs on this worker).
+        """Ask LRCLIB when there are no local or embedded lyrics (cached, runs on this worker).
         Returns (lines, error) so offline reads differently from 'no lyrics'."""
         try:
             import library_cache, lyrics_fetch
             t = library_cache.get_tags(path)
-            lrc, err = lyrics_fetch.fetch(t.get("artist", ""), t.get("title", "") or path.stem,
-                                          t.get("album", ""), int(t.get("duration", 0) or 0))
+            raw = t.get("raw") or [""]
+            lrc, err = lyrics_fetch.fetch(raw[0], t.get("title", "") or path.stem,
+                                          t.get("album", ""), int(t.get("duration", 0) or 0),
+                                          also=(t.get("artist", ""), *t.get("artists", [])[:1]))
             if lrc:
                 parsed = _parse_lrc(lrc)
                 return (parsed if parsed else [(0, lrc.strip())]), None
@@ -452,7 +456,7 @@ class LyricsWidget(QWidget):
             return [], None
 
     def retry_search(self):
-        """Re-run the lookup for the current track (e.g. after network came back)."""
+        """Look the current track up again, for example after the network came back."""
         p = getattr(self, "_cur_path", None)
         if p is None:
             return
@@ -468,7 +472,7 @@ class LyricsWidget(QWidget):
         if not lines:
             self._scroll.hide()
             self._no_lyr.setText(
-                "Couldn't reach LRCLIB — check your connection\n(right-click → Retry)"
+                "Couldn't reach LRCLIB. Check your connection.\n(right-click, then Retry)"
                 if err == "network" else "No lyrics found")
             self._no_lyr.show()
             return

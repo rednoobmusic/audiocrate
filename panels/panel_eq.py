@@ -1,25 +1,26 @@
-"""User parametric EQ panel — an interactive frequency-response editor.
+"""User parametric EQ panel: an interactive frequency-response editor.
 
-  • drag a point to set its frequency (x) and gain (y)
-  • right-click on the graph to add a new band there
-  • double-click a point to remove it
-  • scroll over a point to change its Q (width) — from very wide to a single freq
-  • per-band type/freq/gain/Q controls, input/output trim, bypass
-  • save / load named presets; presets in ~/Documents/EQPresets; state persists to ~/.config/audiocrate/eq.json
+Drag a point to set its frequency (x) and gain (y), right-click the graph to add a band there,
+double-click a point to remove it, scroll over a point to change its Q. Each band has type, freq,
+gain, Q and slope controls, and there are input and output trims and a bypass. Presets are
+named files in ~/Documents/EQPresets; the current state is kept in ~/.config/audiocrate/eq.json.
 """
 from __future__ import annotations
 import json
+import safe_write
 import math
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QPointF, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QFont
+from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QSize, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
-    QDoubleSpinBox, QInputDialog, QMessageBox, QSizePolicy,
+    QDoubleSpinBox, QInputDialog, QMessageBox, QSizePolicy, QLayout,
 )
 
+import power
+from applog import log
 from dsp_chain import (
     ParametricEQ, EQ_TYPES, EQ_FMIN, EQ_FMAX, EQ_GMIN, EQ_GMAX, EQ_QMIN, EQ_QMAX,
     EQ_SLOPES, EQ_SLOPE_TYPES,
@@ -27,21 +28,22 @@ from dsp_chain import (
 
 _CFG_DIR     = Path.home() / ".config" / "audiocrate"
 _EQ_STATE    = _CFG_DIR / "eq.json"
-# User-facing preset files live in ~/Documents/EQPresets so they're easy to find,
-# share and back up (one .json per preset).
+# Presets live in ~/Documents/EQPresets, one .json each, so they are easy to find, share and back up.
 _PRESET_DIR  = Path.home() / "Documents" / "EQPresets"
 _GRID_FREQS  = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 _GRID_GAINS  = [-24, -18, -12, -6, 0, 6, 12, 18, 24]
 _HIT_PX      = 16
 _GAIN_TYPES  = ("peaking", "lowshelf", "highshelf")   # types whose handle Y = gain
-# Fixed log-spaced frequency grid for the response curve — constant, so it's
-# computed once at import rather than every repaint.
+# Log-spaced frequency grid for the response curve, computed once at import.
 _RESP_FREQS  = np.logspace(math.log10(EQ_FMIN), math.log10(EQ_FMAX), 240)
+_RESP_XN     = np.log(_RESP_FREQS / EQ_FMIN) / math.log(EQ_FMAX / EQ_FMIN)   # 0..1 across the width
 
 
 class _EqCurve(QWidget):
     edited           = Signal()        # any band value changed (persist + refresh controls)
     selectionChanged = Signal()        # a different band became selected
+    _gmin, _gmax = EQ_GMIN, EQ_GMAX    # the dB range the graph shows
+    _pad = 0                           # pixels kept free at the left and right edge of the frequency axis
 
     def __init__(self, eq: ParametricEQ, player=None, parent=None):
         super().__init__(parent)
@@ -58,23 +60,27 @@ class _EqCurve(QWidget):
         self._spec_freqs = None
         self._spec_win = np.hanning(2048).astype(np.float32)
         self._suspended = False    # set by the window when minimized/unfocused
-        self._resp_sig = None      # cache key for the EQ response curve
+        self._resp_sig = None      # cache key for the curve layer
+        self._curve_pm = None
         self._resp_db  = None      # cached response_db over _RESP_FREQS
+        self._grid_pm  = None      # grid and labels, painted once per size/colour
+        self._grid_key = None
+        self._spec_map = None      # (width, bin count) -> column starts for the backdrop
         self._spec_timer = QTimer(self)
-        self._spec_timer.setInterval(33)   # 30 fps — matches the other visualizers
+        self._spec_timer.setInterval(power.frame_ms(40))   # 25 fps, plenty for a backdrop
+        power.watch().changed.connect(
+            lambda _: self._spec_timer.setInterval(power.frame_ms(40)))
         self._spec_timer.timeout.connect(self._spec_tick)
-        # Only runs while visible AND focused (see _sync_timer / set_suspended).
+        # Runs only while visible and not suspended (see _sync_timer / set_suspended).
         self.setMinimumHeight(220)
-        # Capped so the tabbed dock group (shared with Controls/Oscilloscope/Milkdrop)
-        # can't over-allocate this tab's share on a shrink-then-regrow — Qt's dock
-        # layout doesn't persist per-tab stretch, so an unbounded Expanding widget
-        # here would balloon disproportionately when the dock area regains size.
+        # Capped because the tabbed dock group (shared with Controls, Oscilloscope and
+        # Milkdrop) can over-allocate this tab's share after a shrink and regrow: Qt's
+        # dock layout does not keep per-tab stretch, so an unbounded Expanding widget
+        # balloons when the dock area grows again.
         self.setMaximumHeight(600)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-    # run only when visible & focused (perf — frees frames when hidden)
 
     def set_suspended(self, suspended: bool):
         self._suspended = bool(suspended)
@@ -110,7 +116,7 @@ class _EqCurve(QWidget):
         db = 20.0 * np.log10(mag + 1e-7)
         if self._spec_db is None or len(self._spec_db) != len(db):
             self._spec_db = db
-            self._spec_freqs = np.fft.rfftfreq(2048, 1.0 / 44100)
+            self._spec_freqs = np.fft.rfftfreq(2048, 1.0 / getattr(getattr(self._player, "_dsp", None), "fs", 44100))
         else:                                                # fast rise, slow fall
             self._spec_db = np.where(db > self._spec_db, db, self._spec_db * 0.8 + db * 0.2)
         self.update()
@@ -131,7 +137,7 @@ class _EqCurve(QWidget):
             self.update()
 
     def set_default_accent(self, color):
-        """The app-theme idle colour (user-customisable purple replacement)."""
+        """The idle colour from the app theme."""
         self._default_accent = QColor(color)
         if not self._has_art and not self._system_accent:
             self._accent = self._idle_accent()
@@ -155,28 +161,28 @@ class _EqCurve(QWidget):
 
     # coordinate mapping
     def _f2x(self, f):
-        W = max(1, self.width())
-        return math.log(max(EQ_FMIN, f) / EQ_FMIN) / math.log(EQ_FMAX / EQ_FMIN) * W
+        W = max(1, self.width() - 2 * self._pad)
+        return math.log(max(EQ_FMIN, f) / EQ_FMIN) / math.log(EQ_FMAX / EQ_FMIN) * W + self._pad
 
     def _x2f(self, x):
-        W = max(1, self.width())
-        return EQ_FMIN * (EQ_FMAX / EQ_FMIN) ** (min(max(x, 0), W) / W)
+        W = max(1, self.width() - 2 * self._pad)
+        return EQ_FMIN * (EQ_FMAX / EQ_FMIN) ** (min(max(x - self._pad, 0), W) / W)
 
     def _g2y(self, g):
         H = max(1, self.height())
-        return (EQ_GMAX - g) / (EQ_GMAX - EQ_GMIN) * H
+        return (self._gmax - g) / (self._gmax - self._gmin) * H
 
     def _y2g(self, y):
         H = max(1, self.height())
-        return EQ_GMAX - (min(max(y, 0), H) / H) * (EQ_GMAX - EQ_GMIN)
+        return self._gmax - (min(max(y, 0), H) / H) * (self._gmax - self._gmin)
 
     def _handle_pos(self, b):
         y = self._g2y(b.gain if b.type in _GAIN_TYPES else 0.0)
         return QPointF(self._f2x(b.freq), y)
 
     def _eq_signature(self):
-        """Cheap hashable snapshot of everything response_db() depends on, so the
-        curve is only recomputed when a band/gain actually changes."""
+        """Hashable snapshot of everything response_db() depends on, so the curve is
+        only recomputed when a band or gain changes."""
         eq = self._eq
         return (eq.enabled, eq.input_gain, eq.output_gain,
                 tuple((b.type, b.freq, b.gain, b.q, b.enabled, b.slope)
@@ -202,56 +208,109 @@ class _EqCurve(QWidget):
         finally:
             p.end()
 
+    def _grid(self, W, H):
+        """Background, grid lines and their labels, painted once into a pixmap. They only
+        change with the size or the colours, and drawing about twenty text labels per
+        frame was most of what this panel cost."""
+        pal = self.palette()
+        dpr = self.devicePixelRatioF()
+        key = (W, H, dpr, pal.base().color().rgba(), pal.text().color().rgba(), self._gmin, self._gmax)
+        if key != self._grid_key:
+            pm = QPixmap(int(W * dpr), int(H * dpr))
+            pm.setDevicePixelRatio(dpr)
+            g = QPainter(pm)
+            g.setRenderHint(QPainter.Antialiasing, True)
+            g.fillRect(0, 0, W, H, pal.base().color())
+            grid = QColor(pal.text().color()); grid.setAlpha(28)
+            zero = QColor(pal.text().color()); zero.setAlpha(70)
+            txt  = QColor(pal.text().color()); txt.setAlpha(120)
+            f = QFont(); f.setPointSize(7); g.setFont(f)
+            for fr in self._grid_freqs(W):
+                x = self._f2x(fr)
+                g.setPen(QPen(grid, 1)); g.drawLine(int(x), 0, int(x), H)
+                g.setPen(txt)
+                lbl = f"{fr//1000}k" if fr >= 1000 else str(fr)
+                g.drawText(int(x) + 2, 10, lbl)
+            for gn in self._grid_gains():
+                y = self._g2y(gn)
+                g.setPen(QPen(zero if gn == 0 else grid, 1))
+                g.drawLine(0, int(y), W, int(y))
+                if gn not in (self._gmin, self._gmax):
+                    g.setPen(txt); g.drawText(2, int(y) - 2, f"{gn:+d}")
+            g.end()
+            self._grid_pm, self._grid_key = pm, key
+        return self._grid_pm
+
+    def _grid_freqs(self, W):
+        return _GRID_FREQS
+
+    def _grid_gains(self):
+        return _GRID_GAINS
+
+    def _backdrop_points(self, W, H):
+        """The live spectrum as one point per 2 px column (the loudest bin in it)."""
+        floor, top = -84.0, 0.0
+        sf = self._spec_freqs
+        m = self._spec_map
+        if m is None or m[0] != W or m[1] != len(sf):
+            sel = (sf >= EQ_FMIN) & (sf <= EQ_FMAX)
+            xs = np.log(np.maximum(sf[sel], EQ_FMIN) / EQ_FMIN) / math.log(EQ_FMAX / EQ_FMIN)
+            xs = xs * (W - 2 * self._pad) + self._pad
+            starts = np.flatnonzero(np.diff(np.floor(xs / 2.0), prepend=-1.0))
+            m = self._spec_map = (W, len(sf), sel, xs[starts], starts)
+        _, _, sel, xs, starts = m
+        db = np.maximum.reduceat(np.clip(self._spec_db[sel], floor, top), starts)
+        ys = (1.0 - (db - floor) / (top - floor)) * H
+        pts = list(map(QPointF, xs.tolist(), ys.tolist()))
+        if self._pad:
+            pts = [QPointF(0.0, pts[0].y()), *pts, QPointF(float(W), pts[-1].y())]
+        return pts
+
     def _paint(self, p, W, H):
         p.setRenderHint(QPainter.Antialiasing, True)
-        pal = self.palette()
-        bg = pal.base().color()
-        p.fillRect(self.rect(), bg)
+        p.drawPixmap(0, 0, self._grid(W, H))
 
-        grid = QColor(pal.text().color()); grid.setAlpha(28)
-        zero = QColor(pal.text().color()); zero.setAlpha(70)
-        txt  = QColor(pal.text().color()); txt.setAlpha(120)
-        f = QFont(); f.setPointSize(7); p.setFont(f)
-
-        for fr in _GRID_FREQS:
-            x = self._f2x(fr)
-            p.setPen(QPen(grid, 1)); p.drawLine(int(x), 0, int(x), H)
-            p.setPen(txt)
-            lbl = f"{fr//1000}k" if fr >= 1000 else str(fr)
-            p.drawText(int(x) + 2, 10, lbl)
-        for g in _GRID_GAINS:
-            y = self._g2y(g)
-            p.setPen(QPen(zero if g == 0 else grid, 1))
-            p.drawLine(0, int(y), W, int(y))
-            if g not in (EQ_GMIN, EQ_GMAX):
-                p.setPen(txt); p.drawText(2, int(y) - 2, f"{g:+d}")
-
-        # live spectrum backdrop (post-EQ output → moves with the song & the EQ)
+        # live spectrum backdrop (post-EQ output, moves with the song and the EQ).
+        # The only thing that changes every frame, so it is the only thing drawn
+        # per frame: the grid above and the curve layer below are cached pixmaps.
         if self._spec_db is not None and self._spec_freqs is not None:
-            floor, top = -84.0, 0.0
-            sf, sdb = self._spec_freqs, np.clip(self._spec_db, floor, top)
-            mask = (sf >= EQ_FMIN) & (sf <= EQ_FMAX)
-            pts = [QPointF(self._f2x(float(fr)),
-                           (1.0 - (float(d) - floor) / (top - floor)) * H)
-                   for fr, d in zip(sf[mask], sdb[mask])]
+            pts = self._backdrop_points(W, H)
             if len(pts) > 2:
                 fillp = QPolygonF(pts)
                 fillp.append(QPointF(pts[-1].x(), H)); fillp.append(QPointF(pts[0].x(), H))
                 sc = QColor(self._accent); sc.setAlpha(45)
+                # Un-antialiased: a translucent fill over most of a wide panel is
+                # the costly part, and its soft edge is not worth the pixels.
+                p.setRenderHint(QPainter.Antialiasing, False)
                 p.setPen(Qt.NoPen); p.setBrush(sc); p.drawPolygon(fillp)
+                p.setRenderHint(QPainter.Antialiasing, True)
                 sl = QColor(self._accent); sl.setAlpha(110)
                 p.setPen(QPen(sl, 1)); p.setBrush(Qt.NoBrush); p.drawPolyline(QPolygonF(pts))
 
-        # response curve — recomputed only when the EQ actually changes, not on
-        # every spectrum frame (response_db cascades biquads over 240 freqs).
-        sig = self._eq_signature()
-        if sig != self._resp_sig:
-            self._resp_sig = sig
-            self._resp_db  = np.clip(self._eq.response_db(_RESP_FREQS), EQ_GMIN, EQ_GMAX)
-        resp = self._resp_db
-        xs = [self._f2x(fr) for fr in _RESP_FREQS]
-        ys = [self._g2y(g) for g in resp]
-        line = QPolygonF([QPointF(x, y) for x, y in zip(xs, ys)])
+        p.drawPixmap(0, 0, self._curve_layer(W, H))
+
+    def _curve_layer(self, W, H):
+        """Response curve and band handles on a transparent pixmap, repainted only
+        when the EQ, the selection, the colours or the size change (response_db
+        cascades biquads over 240 frequencies, and the handles draw text)."""
+        pal = self.palette()
+        dpr = self.devicePixelRatioF()
+        sig = (W, H, dpr, self._eq_signature(), self._accent.rgba(), self._sel,
+               pal.text().color().rgba(), self._gmin, self._gmax)
+        if sig == self._resp_sig:
+            return self._curve_pm
+        self._resp_sig = sig
+        self._resp_db = np.clip(self._eq.response_db(_RESP_FREQS), self._gmin, self._gmax)
+        pm = QPixmap(int(W * dpr), int(H * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        xs = (_RESP_XN * (W - 2 * self._pad) + self._pad).tolist()
+        ys = ((self._gmax - self._resp_db) / (self._gmax - self._gmin) * H).tolist()
+        if self._pad:
+            xs, ys = [0.0, *xs, float(W)], [ys[0], *ys, ys[-1]]
+        line = QPolygonF(list(map(QPointF, xs, ys)))
         fill = QPolygonF(line)
         y0 = self._g2y(0.0)
         fill.append(QPointF(xs[-1], y0)); fill.append(QPointF(xs[0], y0))
@@ -263,18 +322,25 @@ class _EqCurve(QWidget):
         pen = QPen(lc, 2.0); pen.setCosmetic(True); p.setPen(pen); p.setBrush(Qt.NoBrush)
         p.drawPolyline(line)
 
-        # band handles
+        self._paint_handles(p)
+        p.end()
+        self._curve_pm = pm
+        return pm
+
+    def _paint_handles(self, p):
         for i, b in enumerate(self._eq.bands):
             hp = self._handle_pos(b)
-            r = 9 if i == self._sel else 7
-            col = QColor(self._accent)
-            if not b.enabled:
-                col.setAlpha(80)
-            p.setBrush(col)
-            p.setPen(QPen(QColor("#ffffff") if i == self._sel else col.darker(140), 2))
-            p.drawEllipse(hp, float(r), float(r))
+            self._paint_disc(p, hp, 9 if i == self._sel else 7, i == self._sel, b.enabled)
             p.setPen(QColor("#ffffff")); p.setFont(QFont("", 7, QFont.Bold))
             p.drawText(int(hp.x()) - 4, int(hp.y()) + 4, str(i + 1))
+
+    def _paint_disc(self, p, hp, r, selected, enabled=True):
+        col = QColor(self._accent)
+        if not enabled:
+            col.setAlpha(80)
+        p.setBrush(col)
+        p.setPen(QPen(QColor("#ffffff") if selected else col.darker(140), 2))
+        p.drawEllipse(hp, float(r), float(r))
 
     # interaction
     def mousePressEvent(self, e):
@@ -329,7 +395,89 @@ class _EqCurve(QWidget):
         e.accept()
 
 
+class _Flow(QLayout):
+    """Lays items out left to right and wraps to a new line when the row is full.
+
+    Items keep their natural size, so a narrow dock does not squeeze the controls
+    below their text width and clip the labels.
+    """
+
+    def __init__(self, parent=None, hspace: int = 14, vspace: int = 6):
+        super().__init__(parent)
+        self._items: list = []
+        self._h, self._v = hspace, vspace
+        self._need = 0          # height the rows need at the width last laid out
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._lay(QRect(0, 0, w, 0), False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        need = self._lay(rect, True)
+        if need != self._need:
+            # Report the height so the dock reserves room for the wrapped rows instead
+            # of clipping the bottom ones. Settles on the next pass.
+            self._need = need
+            self.invalidate()
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.sizeHint())
+        m = self.contentsMargins()
+        size = size + QSize(m.left() + m.right(), m.top() + m.bottom())
+        return QSize(size.width(), max(size.height(), self._need))
+
+    def _lay(self, rect, place: bool) -> int:
+        m = self.contentsMargins()
+        area = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line = area.x(), area.y(), 0
+        for it in self._items:
+            hint = it.sizeHint()
+            if line and x + hint.width() > area.right() + 1:
+                x, y, line = area.x(), y + line + self._v, 0
+            if place:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._h
+            line = max(line, hint.height())
+        return y + line - rect.y() + m.bottom()
+
+
+def _field(label: str, widget: QWidget) -> QWidget:
+    """A label and the control it names, kept together when a row wraps."""
+    box = QWidget()
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(5)
+    lay.addWidget(QLabel(label))
+    lay.addWidget(widget)
+    return box
+
+
 class EqWidget(QWidget):
+    status = Signal(str)         # a line for the main window's status bar
+
     def __init__(self, player, parent=None):
         super().__init__(parent)
         self._player = player
@@ -354,69 +502,79 @@ class EqWidget(QWidget):
         self._curve.selectionChanged.connect(self._sync_band_controls)
         root.addWidget(self._curve, 1)
 
-        # band controls row
-        row = QHBoxLayout()
-        row.setSpacing(6)
+        # Compact buttons for this panel only. The app-wide button has generous
+        # padding and a minimum width that suits the toolbars.
+        self.setStyleSheet("QPushButton { padding: 4px 11px; min-width: 0px; }")
+
+        # selected band: the bypass switch, then the band's own fields
+        bands = QWidget()
+        row = _Flow(bands)
         self._bypass = QPushButton("EQ")
         self._bypass.setCheckable(True)
         self._bypass.setToolTip("Enable / bypass the parametric EQ")
-        self._bypass.setFixedWidth(44)
         self._bypass.toggled.connect(self._on_bypass)
         row.addWidget(self._bypass)
 
         self._type = QComboBox()
         self._type.addItems(EQ_TYPES)
         self._type.currentTextChanged.connect(self._on_type)
-        row.addWidget(QLabel("Type")); row.addWidget(self._type)
+        row.addWidget(_field("Type", self._type))
 
         self._freq = QDoubleSpinBox(); self._freq.setRange(EQ_FMIN, EQ_FMAX)
         self._freq.setDecimals(0); self._freq.setSuffix(" Hz")
         self._freq.valueChanged.connect(lambda v: self._set_field("freq", v))
-        row.addWidget(QLabel("Freq")); row.addWidget(self._freq)
+        row.addWidget(_field("Freq", self._freq))
 
         self._gain = QDoubleSpinBox(); self._gain.setRange(EQ_GMIN, EQ_GMAX)
         self._gain.setDecimals(1); self._gain.setSuffix(" dB")
         self._gain.valueChanged.connect(lambda v: self._set_field("gain", v))
-        row.addWidget(QLabel("Gain")); row.addWidget(self._gain)
+        row.addWidget(_field("Gain", self._gain))
 
         self._q = QDoubleSpinBox(); self._q.setRange(EQ_QMIN, EQ_QMAX)
         self._q.setDecimals(2); self._q.setSingleStep(0.1)
         self._q.valueChanged.connect(lambda v: self._set_field("q", v))
-        row.addWidget(QLabel("Q")); row.addWidget(self._q)
+        row.addWidget(_field("Q", self._q))
 
         self._slope = QComboBox()
-        for s in EQ_SLOPES:
-            self._slope.addItem(f"{s} dB/oct", s)
+        for sl in EQ_SLOPES:
+            self._slope.addItem(f"{sl} dB/oct", sl)
         self._slope.setToolTip(
-            "How steeply a highpass/lowpass rolls off past its cutoff, in dB per\n"
-            "octave. 12 = gentle, 48 = very steep. (Highpass/lowpass only.)")
+            "How steeply a highpass or lowpass rolls off past its cutoff, or a shelf\n"
+            "changes level around its frequency, in dB per octave. 12 = gentle,\n"
+            "48 = very steep. (Not for peaking or notch bands.)")
         self._slope.currentIndexChanged.connect(self._on_slope)
-        row.addWidget(QLabel("Slope")); row.addWidget(self._slope)
+        row.addWidget(_field("Slope", self._slope))
 
         self._del = QPushButton("Remove"); self._del.clicked.connect(self._remove_selected)
         row.addWidget(self._del)
-        row.addStretch()
-        root.addLayout(row)
+        root.addWidget(bands)
 
-        # global trim + presets row
-        row2 = QHBoxLayout(); row2.setSpacing(6)
+        # global trim and presets
+        glob = QWidget()
+        row2 = _Flow(glob)
         self._in = QDoubleSpinBox(); self._in.setRange(-24, 24); self._in.setDecimals(1); self._in.setSuffix(" dB")
         self._in.valueChanged.connect(self._on_input)
-        row2.addWidget(QLabel("In")); row2.addWidget(self._in)
+        row2.addWidget(_field("In", self._in))
         self._out = QDoubleSpinBox(); self._out.setRange(-24, 24); self._out.setDecimals(1); self._out.setSuffix(" dB")
         self._out.valueChanged.connect(self._on_output)
-        row2.addWidget(QLabel("Out")); row2.addWidget(self._out)
+        row2.addWidget(_field("Out", self._out))
 
-        row2.addStretch()
-        self._preset = QComboBox(); self._preset.setMinimumWidth(120)
+        self._preset = QComboBox(); self._preset.setMinimumWidth(130)
         self._preset.setToolTip("Presets")
         row2.addWidget(self._preset)
-        load = QPushButton("Load"); load.clicked.connect(self._load_preset); row2.addWidget(load)
-        save = QPushButton("Save"); save.clicked.connect(self._save_preset); row2.addWidget(save)
-        dele = QPushButton("Del");  dele.clicked.connect(self._delete_preset); row2.addWidget(dele)
-        flat = QPushButton("Flat"); flat.setToolTip("Reset to a flat EQ (highpass + lowpass dots)")
-        flat.clicked.connect(self._flat); row2.addWidget(flat)
-        root.addLayout(row2)
+        for text, slot, tip in (("Load", self._load_preset, ""),
+                                ("Save", self._save_preset, ""),
+                                ("Del", self._delete_preset, ""),
+                                ("Flat", self._flat, "Reset to a flat EQ")):
+            b = QPushButton(text)
+            if tip:
+                b.setToolTip(tip)
+            b.clicked.connect(slot)
+            row2.addWidget(b)
+        root.addWidget(glob)
+        for kind in (QPushButton, QComboBox, QDoubleSpinBox):
+            for w in self.findChildren(kind):
+                w.setFixedHeight(26)     # spin boxes, combos and buttons on one baseline
 
     # selection / field sync
     def _sync_band_controls(self):
@@ -482,7 +640,7 @@ class EqWidget(QWidget):
             self._queue_save()
 
     def _set_defaults(self):
-        """Flat EQ, no bands — right-click the graph to add points."""
+        """Flat EQ with no bands. Right-click the graph to add points."""
         self._eq.bands = []
         self._eq.input_gain = 0.0
         self._eq.output_gain = 0.0
@@ -539,7 +697,7 @@ class EqWidget(QWidget):
     def _save_state(self):
         try:
             _CFG_DIR.mkdir(parents=True, exist_ok=True)
-            _EQ_STATE.write_text(json.dumps(self._eq.to_dict(), indent=2), encoding="utf-8")
+            safe_write.write_text(_EQ_STATE, json.dumps(self._eq.to_dict(), indent=2))
         except Exception:
             pass
 
@@ -552,7 +710,7 @@ class EqWidget(QWidget):
         except Exception:
             pass
         if not loaded:
-            self._set_defaults()   # fresh: flat with HP + LP dots
+            self._set_defaults()   # nothing saved yet: flat, no bands
         self._apply_to_ui()
 
     # presets
@@ -593,7 +751,8 @@ class EqWidget(QWidget):
             self._refresh_presets()
             self._preset.setCurrentText(name.strip())
         except Exception:
-            pass
+            log.exception("could not save the equalizer preset %s", name.strip())
+            self.status.emit(f"Could not save the preset {name.strip()}.")
 
     def _load_preset(self):
         name = self._preset.currentText()
@@ -605,7 +764,8 @@ class EqWidget(QWidget):
             self._apply_to_ui()
             self._save_state()
         except Exception:
-            pass
+            log.exception("could not load the equalizer preset %s", name)
+            self.status.emit(f"Could not load the preset {name}.")
 
     def _delete_preset(self):
         name = self._preset.currentText()
@@ -615,5 +775,6 @@ class EqWidget(QWidget):
             try:
                 (_PRESET_DIR / f"{name}.json").unlink(missing_ok=True)
             except Exception:
-                pass
+                log.exception("could not delete the equalizer preset %s", name)
+                self.status.emit(f"Could not delete the preset {name}.")
             self._refresh_presets()

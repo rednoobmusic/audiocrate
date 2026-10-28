@@ -96,7 +96,7 @@ export function Library() {
         {!loading && tab === 'songs' && (
           songs.length === 0 ? (
             <div className="ac-empty">
-              {term ? `Nothing matching “${term}”.` : 'Library is empty — add folders on the desktop.'}
+              {term ? `Nothing matching “${term}”.` : 'Library is empty. Add folders on the desktop.'}
             </div>
           ) : (
             <>
@@ -135,7 +135,7 @@ export function Library() {
                   <IonLabel>
                     <h3>{g.name}</h3>
                     <p>
-                      {tab === 'albums' && g.artist ? `${g.artist} — ` : ''}
+                      {tab === 'albums' && g.artist ? `${g.artist} - ` : ''}
                       {g.count} track{g.count === 1 ? '' : 's'}
                     </p>
                   </IonLabel>

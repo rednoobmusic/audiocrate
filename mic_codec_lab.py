@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Mic Codec Lab — real-time mic MP3/Opus mangler (Maim-inspired).
+Mic Codec Lab: a real-time mic MP3/Opus mangler, modelled on Maim.
 
 Pipeline: mic --(ffmpeg/PipeWire)--> tone (lo/hi cut) + rate-snap + drive + bit-crush
 --> MP3 or Opus encode --> [optional bitstream corruption / Opus packet loss]
 --> decode + makeup gain --> virtual PipeWire source "Mic Codec Lab (processed)".
 
-NOTE vs Maim: Maim patches the LAME/Opus *source* to bend the encoder internals
-(MDCT bands, packet structure). We drive stock ffmpeg (a black box), so we mirror
-Maim's control layout with what's externally achievable: drive/makeup/cuts/bitrate
-+ MP3 bitstream error + real Opus packet loss.
+Maim patches the LAME and Opus source to bend the encoder internals (MDCT bands,
+packet structure). This drives stock ffmpeg as a black box, so it copies Maim's
+control layout with what can be done from outside: drive, makeup, cuts, bitrate,
+MP3 bitstream errors and real Opus packet loss.
 
 Run:   python mic_codec_lab.py
 Deps:  PySide6, ffmpeg (libmp3lame/libopus), pactl + pipewire-pulse
@@ -48,7 +48,6 @@ CODECS = {
 }
 
 
-# --------------------------------------------------------------------------
 def _run(cmd: list[str]) -> str:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.strip()
@@ -69,10 +68,6 @@ def default_source() -> str:
 def list_sinks() -> list[str]:
     out = _run(["pactl", "list", "short", "sinks"])
     return [l.split("\t")[1] for l in out.splitlines() if len(l.split("\t")) >= 2]
-
-
-def cleanup_stale_modules():
-    subprocess.run(["pkill", "-9", "-f", f"ffmpeg.*{SINK_NAME}"], capture_output=True)
 
 
 def run_corruptor(prob: float):
@@ -115,7 +110,6 @@ def run_packetloss(rate: float, jitter: float):
         pass
 
 
-# --------------------------------------------------------------------------
 class Knob(QWidget):
     """Draggable rotary knob (drag up/down or scroll). Numeric or label-list."""
     valueChanged = Signal(int)
@@ -185,15 +179,15 @@ class Knob(QWidget):
         p.end()
 
 
-# --------------------------------------------------------------------------
 class Engine:
     def __init__(self):
         self.proc: subprocess.Popen | None = None
+        self.started: list[subprocess.Popen] = []    # every pipeline this run launched, to clear out leftovers
         self.sink_mod = self.src_mod = self.mon_mod = None
 
     def create_virtual_source(self):
         self.destroy_virtual_source()
-        cleanup_stale_modules()
+        self.kill_started()
         if SINK_NAME in _run(["pactl", "list", "short", "sinks"]):
             self.sink_mod = self.src_mod = None
             return
@@ -203,6 +197,17 @@ class Engine:
         self.src_mod = _run(["pactl", "load-module", "module-remap-source",
                              f"master={SINK_NAME}.monitor", f"source_name={SOURCE_NAME}", "channels=1",
                              f"source_properties=device.description={SOURCE_DESC}"]) or None
+
+    def kill_started(self):
+        """Ends any pipeline this tool launched that is still running, with its ffmpeg and filter processes."""
+        for p in self.started:
+            if p.poll() is None:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                    p.wait(timeout=1.0)
+                except Exception:
+                    pass
+        self.started.clear()
 
     def destroy_virtual_source(self):
         for mod in (self.src_mod, self.sink_mod):
@@ -270,6 +275,7 @@ class Engine:
         env = dict(os.environ, PIPEWIRE_LATENCY="512/48000")
         self.proc = subprocess.Popen(["bash", "-o", "pipefail", "-c", cmd],
                                      stderr=subprocess.PIPE, start_new_session=True, env=env)
+        self.started = [p for p in self.started if p.poll() is None] + [self.proc]
         return cmd
 
     def stop_proc(self):
@@ -326,7 +332,6 @@ class Meter:
         self.level = 0.0
 
 
-# --------------------------------------------------------------------------
 class MicCodecLab(QWidget):
     def __init__(self):
         super().__init__()
@@ -352,7 +357,7 @@ class MicCodecLab(QWidget):
     def _build_ui(self):
         root = QVBoxLayout(self)
 
-        io = QGroupBox("Input / Output")
+        io = QGroupBox("Input / output")
         form = QFormLayout(io)
         self.cmb_in = QComboBox()
         srcs = list_input_sources()
@@ -366,14 +371,14 @@ class MicCodecLab(QWidget):
         wrap = QWidget(); wrap.setLayout(rin); form.addRow("Mic:", wrap)
         self.cmb_mon = QComboBox()
         self.cmb_mon.addItem("Off (virtual source only)", ("", False))
-        self.cmb_mon.addItem("Virtual device — Mic Codec Lab Monitor", (MON_SINK_NAME, True))
+        self.cmb_mon.addItem("Virtual device: Mic Codec Lab Monitor", (MON_SINK_NAME, True))
         for s in list_sinks():
             self.cmb_mon.addItem(s, (s, False))
         self.cmb_mon.setCurrentIndex(0)
         form.addRow("Monitor →", self.cmb_mon)
         root.addWidget(io)
 
-        man = QGroupBox("Tone & Drive")
+        man = QGroupBox("Tone and drive")
         mv = QVBoxLayout(man)
         self.k_rate   = Knob("RATE",   2000, 48000, 8000, suffix=" Hz", step=500)
         self.k_bits   = Knob("BITS",   1, 16, 16, step=1)
@@ -496,7 +501,7 @@ class MicCodecLab(QWidget):
                 err = (p.stderr.read() or b"").decode(errors="ignore")[-200:]
             except Exception:
                 pass
-            self.status.setText(f"⚠ Pipeline stopped — ease off ERROR/LOSS or change codec.\n{err}")
+            self.status.setText(f"Pipeline stopped. Ease off ERROR/LOSS or change codec.\n{err}")
             self.btn.setChecked(False)
 
     def closeEvent(self, e):

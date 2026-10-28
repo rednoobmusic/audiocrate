@@ -56,7 +56,7 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
         <div className="ac-login">
           <h1>AUDIOCRATE</h1>
           <p className="sub">
-            {lockout > 0 ? `Locked — retry in ${lockout}s` : 'Enter PIN to continue'}
+            {lockout > 0 ? `Locked, retry in ${lockout}s` : 'Enter PIN to continue'}
           </p>
 
           <div className={`ac-pips ${shake ? 'ac-shake' : ''}`}>

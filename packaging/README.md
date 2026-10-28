@@ -1,10 +1,11 @@
 # Installing AudioCrate on Linux
 
-AudioCrate is pure Python + PySide6, so the cleanest install uses your system
-Python/Qt (no 600 MB bundle). Three options, smallest/simplest first.
+AudioCrate is written in Python with PySide6, so the cleanest install uses your
+system Python and Qt, with no 600 MB bundle. There are three options, the
+smallest and simplest first.
 
 ## 1. User-local (no root), recommended for your own machine
-Installs into `~/.local`, adds a launcher + menu entry. ~16 MB.
+Installs into `~/.local` and adds a launcher and a menu entry. About 16 MB.
 
 ```bash
 # deps (once)
@@ -16,15 +17,15 @@ bash packaging/uninstall.sh    # to remove
 ```
 
 ## 2. Arch package (pacman-managed, system-wide)
-Proper distro integration. Remove later with `pacman -R audiocrate`.
+Installed and removed through pacman. Remove it later with `pacman -R audiocrate`.
 
 ```bash
 makepkg -si -p packaging/PKGBUILD     # run from the project root
 ```
 
 ## 3. Self-contained bundle (no Python/Qt needed on the target)
-For machines that DON'T have the deps. Larger (~143 MB single file) and uses
-the system `ffmpeg` at runtime.
+For machines that do not have the dependencies. It is larger (about 143 MB as a
+single file) and uses the system `ffmpeg` at runtime.
 
 ```bash
 pyinstaller --noconfirm audiocrate-onefile.spec   # → dist/audiocrate (one file)
@@ -32,13 +33,13 @@ pyinstaller --noconfirm audiocrate-onefile.spec   # → dist/audiocrate (one fil
 ```
 
 ## Source protection
-Both the user-local install and the PKGBUILD ship **optimised bytecode only**:
-the install compiles with `python -OO`, which drops docstrings, and comments
-never enter bytecode at all. It then deletes every `.py`, so the installed app
-has no readable source or comments and the launcher runs `main.pyc`. The PyInstaller bundles likewise
-ship `.pyc` inside the archive. (Bytecode is not encryption and can still be
-decompiled, but no source or comments are exposed. It is tied to the Python
-version, so re-install after a major Python upgrade.)
+The user-local install and the PKGBUILD both install bytecode only. The install
+compiles with `python -OO`, which drops docstrings, and comments never enter
+bytecode at all. It then deletes every `.py`, so the installed app has no
+readable source or comments and the launcher runs `main.pyc`. The PyInstaller
+bundles also ship `.pyc` inside the archive. Bytecode is not encryption and can
+still be decompiled, but no source or comments are exposed. It is tied to the
+Python version, so install again after a major Python upgrade.
 
 ## Notes
 - Source layout: `core/ panels/ integrations/ ui/` with flat imports via

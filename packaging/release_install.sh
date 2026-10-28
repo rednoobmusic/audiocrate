@@ -21,7 +21,7 @@ command -v ffmpeg >/dev/null 2>&1 || miss="${miss:+$miss, }ffmpeg"
 
 if [ -n "$miss" ]; then
     echo "Missing dependencies: $miss"
-    if   command -v pacman  >/dev/null; then PM="sudo pacman -S --needed"; PKGS="pyside6 python-numpy python-scipy python-mutagen python-pillow ffmpeg"; OPT="libsidplayfp libgme openmpt zxtune"
+    if   command -v pacman  >/dev/null; then PM="sudo pacman -S --needed"; PKGS="pyside6 python-numpy python-scipy python-mutagen python-pillow ffmpeg"; OPT="libsidplayfp libgme libopenmpt"
     elif command -v apt-get >/dev/null; then PM="sudo apt-get install -y"; PKGS="python3-pyside6 python3-numpy python3-scipy python3-mutagen python3-pil ffmpeg"; OPT="libsidplayfp6 libgme0 openmpt123"
     elif command -v dnf     >/dev/null; then PM="sudo dnf install -y";     PKGS="python3-pyside6 python3-numpy python3-scipy python3-mutagen python3-pillow ffmpeg"; OPT="libsidplayfp libgme openmpt123"
     elif command -v zypper  >/dev/null; then PM="sudo zypper install -y";  PKGS="python3-PySide6 python3-numpy python3-scipy python3-mutagen python3-Pillow ffmpeg"; OPT="libsidplayfp libgme openmpt123"
@@ -30,7 +30,7 @@ if [ -n "$miss" ]; then
     if [ -n "$PM" ]; then
         echo "  $PM $PKGS"
         read -rp "Install them now? [Y/n] " a || a=Y
-        [[ "${a:-Y}" =~ ^[Nn] ]] || $PM $PKGS || echo "Auto-install failed — install the packages above, then re-run."
+        [[ "${a:-Y}" =~ ^[Nn] ]] || $PM $PKGS || echo "Auto-install failed. Install the packages above, then run install.sh again."
     else
         echo "Install these with your package manager (or: pip install --user PySide6 numpy scipy mutagen pillow + ffmpeg)."
     fi

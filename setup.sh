@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="PySide6 Player" # feoihfoirefiodflkjghldfjh v2
+APP_NAME="PySide6 Player"
 INSTALL_DIR="$HOME/.local/share/pyside6player"
 DESKTOP_FILE="$HOME/.local/share/applications/pyside6player.desktop"
 VENV_DIR="$INSTALL_DIR/venv"
@@ -13,11 +13,9 @@ die()   { echo "  [error] $*" >&2; exit 1; }
 
 echo ""
 echo "  $APP_NAME - setup"
-echo "  ────────────────────────────────────"
 
 PYTHON=$(command -v python3 || command -v python || true)
 [ -z "$PYTHON" ] && die "Python 3 not found. Install it first."
-PY_VER=$("$PYTHON" -c "import sys; print(sys.version_info[:2])")
 info "Python: $("$PYTHON" --version)"
 
 if ! command -v ffmpeg &>/dev/null; then

@@ -1,41 +1,45 @@
 from __future__ import annotations
 import threading
+import time
 import numpy as np
 
 from PySide6.QtWidgets import QWidget, QMenu
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QRectF, QTimer, Signal
 from PySide6.QtGui  import (
-    QPainter, QColor, QLinearGradient, QPixmap, QPainterPath,
+    QBrush, QGradient, QPainter, QColor, QLinearGradient, QPixmap,
 )
 
+import power
 from analyzer import Analyzer, BANDS
-from player   import Player, extract_art
+from player   import Player, decode_art, extract_art
 
-# Number of 28ms ticks to lerp across (~700ms transition)
-_LERP_TICKS = 25
+_LERP_S = 0.7      # seconds a colour change takes
 
 
 class _ColorLerper:
-    """Smoothly interpolates between two QColors over _LERP_TICKS steps."""
+    """Interpolates between two QColors over _LERP_S seconds of real time, so
+    panels drawn at different frame rates fade at the same speed."""
 
     def __init__(self, color: QColor):
         self._cur = color
         self._tgt = color
-        self._tick = _LERP_TICKS  # start at end so first set_target animates
+        self._t0 = None           # when the current fade began; None when settled
 
     def set_target(self, color: QColor):
         self._cur = self._current()
         self._tgt = color
-        self._tick = 0
+        self._t0 = time.monotonic()
 
     def step(self):
-        if self._tick < _LERP_TICKS:
-            self._tick += 1
+        """No-op: the colour follows the clock, not the frame count."""
 
     def _current(self) -> QColor:
-        if self._tick >= _LERP_TICKS:
+        if self._t0 is None:
             return self._tgt
-        t = self._tick / _LERP_TICKS
+        t = (time.monotonic() - self._t0) / _LERP_S
+        if t >= 1.0:
+            self._t0 = None
+            return self._tgt
         return QColor(
             int(self._cur.red()   + (self._tgt.red()   - self._cur.red())   * t),
             int(self._cur.green() + (self._tgt.green() - self._cur.green()) * t),
@@ -48,7 +52,7 @@ class _ColorLerper:
 
     @property
     def animating(self) -> bool:
-        return self._tick < _LERP_TICKS
+        return self._t0 is not None and time.monotonic() - self._t0 < _LERP_S
 
 
 class _Cfg:
@@ -64,8 +68,8 @@ class _Cfg:
 
 
 class VisualizerWidget(QWidget):
-    _art_ready      = Signal(bytes)
-    open_settings   = Signal()   # emitted when user clicks "Settings…" in ctx menu
+    _art_ready      = Signal(object)   # QImage or None, decoded off the GUI thread
+    open_settings   = Signal()   # context menu "Settings" item
 
     def __init__(self, analyzer: Analyzer, player: Player, parent=None):
         super().__init__(parent)
@@ -74,7 +78,7 @@ class VisualizerWidget(QWidget):
         self._art: QPixmap | None = None
         self._art_scaled: QPixmap | None = None   # cached per-size scale of _art
         self._art_scaled_key = None
-        self._bar_colors: list = []               # per-bar (top, bottom) colours
+        self._bar_brushes: list = []              # per-bar gradient brush, sized by the bar it fills
         self._bar_colors_key = None
         self._cfg = _Cfg()
         self._default_accent = QColor("#8040c8")  # app accent (user-customisable)
@@ -97,11 +101,13 @@ class VisualizerWidget(QWidget):
         self._suspended = False    # set by the window when minimized/unfocused
         self._tick_timer = QTimer(self)
         self._tick_timer.setTimerType(Qt.PreciseTimer)   # coarse timers stutter
-        self._tick_timer.setInterval(28)
+        self._tick_timer.setInterval(power.frame_ms(28))
         self._tick_timer.timeout.connect(self._tick)
-        # Only runs while actually visible + focused (see _sync_timer / showEvent).
+        power.watch().changed.connect(
+            lambda _: self._tick_timer.setInterval(power.frame_ms(28)))
+        # Runs only while visible and not suspended (see _sync_timer).
 
-    # run only when visible & focused (perf: no FFT/redraw when hidden)
+    # run only when visible and not suspended (no FFT or redraw when hidden)
 
     def set_suspended(self, suspended: bool):
         self._suspended = bool(suspended)
@@ -124,18 +130,10 @@ class VisualizerWidget(QWidget):
 
     def _load_art(self, path):
         data = extract_art(path)
-        self._art_ready.emit(data or b"")
+        self._art_ready.emit(decode_art(data) if data else None)
 
-    def _apply_art(self, data: bytes):
-        if data:
-            pm = QPixmap()
-            pm.loadFromData(data)
-            if not pm.isNull() and max(pm.width(), pm.height()) > 1024:
-                # keep a display-sized copy, not the full 3000² original
-                pm = pm.scaled(1024, 1024, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self._art = pm if not pm.isNull() else None
-        else:
-            self._art = None
+    def _apply_art(self, img):
+        self._art = QPixmap.fromImage(img) if img is not None else None
         self._art_scaled = None
         self._art_scaled_key = None
         self.update()
@@ -251,11 +249,11 @@ class VisualizerWidget(QWidget):
         hi2   = self._lerp2.color
         pkclr = hi.lighter(160)
 
-        # Per-bar colours only depend on the lerp state — rebuild the table when
+        # Per-bar colours depend only on the lerp state: rebuild the table when
         # the colours move (~700 ms per track change), not on every frame.
         ckey = (hi.rgba(), hi2.rgba(), n)
         if self._bar_colors_key != ckey:
-            colors = []
+            brushes = []
             for i in range(n):
                 t  = i / max(n - 1, 1)
                 r0 = int(hi.red()   * (1 - t) + hi2.red()   * t)
@@ -265,32 +263,34 @@ class VisualizerWidget(QWidget):
                                  min(255, int(g0 * 1.3)),
                                  min(255, int(b0 * 1.3)), 235)
                 bot_clr = QColor(r0 // 2, g0 // 2, b0 // 2, 150)
-                colors.append((top_clr, bot_clr))
-            self._bar_colors = colors
+                # Bounding-box coordinates: the same brush fits a bar of any height,
+                # so nothing is built per bar per frame.
+                grad = QLinearGradient(0.0, 0.0, 0.0, 1.0)
+                grad.setCoordinateMode(QGradient.ObjectBoundingMode)
+                grad.setColorAt(0.0, top_clr)
+                grad.setColorAt(1.0, bot_clr)
+                brushes.append(QBrush(grad))
+            self._bar_brushes = brushes
             self._bar_colors_key = ckey
 
         rounded = cr > 0.0
         if not rounded:
             p.setRenderHint(QPainter.Antialiasing, False)
+        p.setPen(Qt.NoPen)
 
+        brushes = self._bar_brushes
         for i in range(n):
             v  = float(bands[i])
             pk = float(peaks[i])
             bh = max(2.0, v * (H - 6))
             x  = i * step
             y  = H - bh
-            top_clr, bot_clr = self._bar_colors[i]
-
-            bar_grad = QLinearGradient(0, float(y), 0, float(H))
-            bar_grad.setColorAt(0.0, top_clr)
-            bar_grad.setColorAt(1.0, bot_clr)
 
             if rounded:
-                path = QPainterPath()
-                path.addRoundedRect(float(x), float(y), float(bw), float(bh), cr, cr)
-                p.fillPath(path, bar_grad)
+                p.setBrush(brushes[i])
+                p.drawRoundedRect(QRectF(x, y, bw, bh), cr, cr)
             else:
-                p.fillRect(int(x), int(y), int(bw), int(bh) + 1, bar_grad)
+                p.fillRect(int(x), int(y), int(bw), int(bh) + 1, brushes[i])
 
             if cfg.peak_hold and pk > cfg.peak_thresh:
                 py = max(1.0, H - pk * (H - 6) - 3)

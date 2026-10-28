@@ -1,9 +1,9 @@
 # Maintainer: rednoobmusic
-# Build + install the proper Arch way (from the project root):
+# Build and install from the project root:
 #   makepkg -si -p packaging/PKGBUILD
-# Then it's a normal package: launch from the menu, remove with `pacman -R audiocrate`.
+# After that it is a normal package: start it from the menu, remove it with `pacman -R audiocrate`.
 pkgname=audiocrate
-pkgver=1.0.0       # keep in sync with core/_version.py
+pkgver=1.5.0       # keep in sync with core/_version.py
 pkgrel=1
 pkgdesc="Audio player with live DSP, parametric EQ, visualizers and chiptune support"
 arch=('any')
@@ -12,16 +12,20 @@ license=('custom')
 depends=('python' 'pyside6' 'python-numpy' 'python-scipy' 'python-mutagen'
          'python-pillow' 'ffmpeg')
 optdepends=('libgme: VGM/VGZ chiptune playback'
-            'python-pypresence: Discord Rich Presence')
+            'python-pypresence: Discord Rich Presence'
+            'yt-dlp: the Online panel'
+            'deno: the JavaScript runtime yt-dlp needs for YouTube'
+            'udisks2: mounting and ejecting drives in the Devices panel'
+            'libgpod: writing the database of an iPod')
 options=('!strip')
 
 package() {
-    # Build straight from the working tree (no source tarball).
+    # built straight from the working tree, there is no source tarball
     local root="$startdir/.."
     local dst="$pkgdir/usr/lib/audiocrate"
     install -dm755 "$dst"
-    # panels/ staged as *.py only — it also holds local working trees
-    # (panels/myfurnace) that must never be packaged.
+    # panels/ also holds local working trees (panels/myfurnace) that must never
+    # be packaged, so only its .py files are copied
     cp -r "$root"/main.py "$root"/_bootstrap.py \
           "$root"/core "$root"/integrations "$root"/ui \
           "$root"/JetBrainsMono "$root"/icon.png \
@@ -32,8 +36,8 @@ package() {
         [ -f "$root/$_so" ] && install -Dm755 "$root/$_so" "$dst/$_so"
     done
 
-    # Ship optimised bytecode only — strips comments + docstrings, removes .py
-    # source so the package exposes no readable source.
+    # bytecode only: -OO strips docstrings, compiling drops comments, and the
+    # .py files are deleted afterwards
     python -OO -m compileall -b -q "$dst" >/dev/null 2>&1 || \
         python -m compileall -b -q "$dst" >/dev/null 2>&1 || true
     find "$dst" -name '*.py' -delete

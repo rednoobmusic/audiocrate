@@ -66,7 +66,7 @@ export function PlaylistDetail() {
           <>
             <div className="ac-section-head">
               {items.length} track{items.length === 1 ? '' : 's'}
-              {missing > 0 && ` · ${missing} unavailable`}
+              {missing > 0 && `, ${missing} unavailable`}
             </div>
             <IonList>
               {items.map((t, i) => (

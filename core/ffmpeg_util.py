@@ -1,5 +1,6 @@
-"""Resolve the ffmpeg binary — bundled next to the executable takes priority."""
+"""Finds the ffmpeg binary. One bundled next to the executable wins over the system one."""
 from __future__ import annotations
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,13 +30,13 @@ def ffmpeg_path() -> str | None:
                 _resolved = str(candidate)
                 return _resolved
 
-    # Fall back to system PATH
+    # last, the system PATH
     found = shutil.which("ffmpeg")
     if found:
         _resolved = found
         return _resolved
 
-    _resolved = ""   # not found — cache the miss
+    _resolved = ""   # not found: cache the miss
     return None
 
 
@@ -47,7 +48,7 @@ def probe_duration(path: Path | str) -> float:
     """Seconds according to ffprobe, or 0.0 if it cannot say.
 
     mutagen knows the container formats it was written for and nothing else, so
-    for most of the 249 extensions this plays it returns no length at all. What
+    for most of the extensions this plays it returns no length at all. What
     ffmpeg can demux, ffprobe can measure, which is nearly all of them.
 
     A subprocess per file, so this belongs behind a cache and on the slow path.
@@ -58,7 +59,8 @@ def probe_duration(path: Path | str) -> float:
         exe = ffmpeg_path()
         if not exe:
             return 0.0
-        probe = exe.replace("ffmpeg", "ffprobe")
+        folder, name = os.path.split(exe)
+        probe = os.path.join(folder, name.replace("ffmpeg", "ffprobe"))
         r = subprocess.run(
             [probe, "-v", "quiet", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", str(path)],

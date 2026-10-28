@@ -1,21 +1,21 @@
 """Commodore 64 SID playback support (libsidplayfp via libsid_wrap.so).
 
 A SID file is a 6502 program, not a recording: it has subsongs, and nothing in
-it says how long any of them last. So a tune is *scanned once* before it plays —
+it says how long any of them last. So a tune is scanned once before it plays:
 rendered to PCM, given a length, then written out as a plain WAV that the normal
-DSP engine plays. By the time playback starts the duration is already known, so
-the seek bar and time display are correct from the first frame.
+DSP engine plays. The duration is known when playback starts, so the seek bar
+and time display are right from the first frame.
 
-Length is resolved in three tiers, best source first:
+The length comes from the first of these that gives an answer:
 
-  1. HVSC songlength database — exact, per-subsong, community-curated. Covers
-     every published tune (~60k). Looked up by MD5 through libsidplayfp.
-  2. Automatic detection (``loop_detect``) — for tunes no database knows:
-     new releases, private exports, your own music.
-  3. The full render window, if neither is conclusive.
+  1. The HVSC songlength database, per subsong, looked up by MD5 through
+     libsidplayfp.
+  2. Automatic detection (``loop_detect``), for tunes the database does not
+     know: new releases, private exports, your own music.
+  3. A default length, if detection is not conclusive.
 
-Everything is cached on disk keyed by (file, mtime, size, subsong), so the scan
-happens once per tune and repeat plays start instantly.
+Everything is cached on disk keyed by (file, mtime, size, subsong), so a tune is
+scanned once and repeat plays start at once.
 """
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ class SidInfo:
 
 
 def read_info(path: Path) -> SidInfo | None:
-    """Header metadata. Falls back to parsing PSID directly if the lib is absent."""
+    """Header metadata. Falls back to parsing the PSID header if the lib is absent."""
     lib = _load_lib()
     if lib is not None:
         m = _Meta()
@@ -144,7 +144,7 @@ def _key(path: Path, subsong: int) -> str:
 
 
 def _db_length_s(path: Path, subsong: int) -> float | None:
-    """Exact length from the HVSC database, if we have one and it knows this tune."""
+    """Length from the HVSC database, if there is one and it knows this tune."""
     lib, db = _load_lib(), database_path()
     if lib is None or db is None:
         return None
@@ -155,7 +155,7 @@ def _db_length_s(path: Path, subsong: int) -> float | None:
 def _render_pcm(path: Path, subsong: int, seconds: int) -> np.ndarray | None:
     """Render a subsong to interleaved stereo int16.
 
-    Serialised against every other native chiptune render — see native_lock.
+    Serialised against every other native chiptune render, see native_lock.
     """
     lib = _load_lib()
     if lib is None:
@@ -173,9 +173,9 @@ def _render_pcm(path: Path, subsong: int, seconds: int) -> np.ndarray | None:
 class StreamReader:
     """Pull a subsong a chunk at a time, for DspEngine.load_stream().
 
-    Only usable when the length is already known (a database hit, or a scan we
-    did earlier) — otherwise there is nothing to show on the seek bar and no way
-    to know where to stop.
+    Only usable when the length is already known (a database hit, or an earlier
+    scan). Without it there is nothing for the seek bar and no way to know where
+    to stop.
     """
 
     def __init__(self, path: Path, subsong: int, rate: int = _RATE):
@@ -215,7 +215,7 @@ class StreamReader:
 
 
 def known_length(path: Path, subsong: int = 1) -> float | None:
-    """Length without rendering anything: database, or an earlier cached scan."""
+    """Length without rendering anything: the database, or an earlier cached scan."""
     ms = _db_length_s(path, subsong)
     if ms:
         return ms
@@ -229,11 +229,10 @@ def known_length(path: Path, subsong: int = 1) -> float | None:
 def scan(path: Path, subsong: int = 1) -> tuple[str, float, str]:
     """Prepare a subsong for playback: render it, decide its length, cache a WAV.
 
-    This is the "clean run" that happens before the tune plays, so the duration
-    is known up front rather than being discovered while listening.
-
-    Returns (wav_path, length_seconds, source) where source is one of
-    "database", "detected" or "default".
+    Returns (wav_path, length_seconds, source). source is "database", "detected",
+    "detected~" (a loop with a weak match), "default", or "error" with an empty
+    path when nothing could be rendered; a cached scan returns the source it was
+    stored with.
     """
     _CACHE.mkdir(parents=True, exist_ok=True)
     k = _key(path, subsong)
@@ -245,9 +244,8 @@ def scan(path: Path, subsong: int = 1) -> tuple[str, float, str]:
         except Exception:
             pass
 
-    # Tier 1: the database is authoritative when it knows the tune. Ask it
-    # first — then we only have to render the length it gives us, instead of
-    # emulating the whole scan window to find out something already known.
+    # Ask the database first: then only the length it gives has to be rendered,
+    # not the whole scan window.
     length = _db_length_s(path, subsong)
     source = "database"
     if length is not None:
@@ -258,11 +256,11 @@ def scan(path: Path, subsong: int = 1) -> tuple[str, float, str]:
         pcm = _render_pcm(path, subsong, _SCAN_S)
         if pcm is None or len(pcm) == 0:
             return "", 0.0, "error"
-        # Tier 2: work it out from the audio itself.
+        # no database entry, so find the end from the audio itself
         mono = pcm.mean(axis=1).astype(np.float32) / 32768.0
         r = loop_detect.analyze(mono, _RATE, loops=2)
         if r.reason == "full":
-            length, source = _DEFAULT_S, "default"      # tier 3
+            length, source = _DEFAULT_S, "default"
         elif r.reason == "loop" and r.confidence < loop_detect._STRONG_MATCH:
             # a plausible loop still beats an arbitrary default, but say so
             length, source = r.length_s, "detected~"
@@ -272,7 +270,7 @@ def scan(path: Path, subsong: int = 1) -> tuple[str, float, str]:
     length = max(1.0, min(length, _SCAN_S))
     frames = int(length * _RATE)
     out = pcm[:frames]
-    # Short fade so a tune cut at a loop point doesn't end on a click.
+    # short fade so a tune cut at a loop point does not end on a click
     fade = min(len(out), int(0.05 * _RATE))
     if fade > 0:
         ramp = np.linspace(1.0, 0.0, fade, dtype=np.float32)[:, None]

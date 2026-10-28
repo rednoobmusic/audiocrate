@@ -5,34 +5,27 @@ cd "$(dirname "$0")"
 APP=audiocrate
 APPDIR=dist/AppDir
 
-# 1. PyInstaller
-echo ">>> Running PyInstaller..."
 pyinstaller --clean audiocrate.spec
 
-# 1b. Bundle ffmpeg
-echo ">>> Bundling ffmpeg..."
+# ffmpeg_util looks for a copy next to the executable before the system one
 FFMPEG_BIN=$(which ffmpeg 2>/dev/null || echo "")
 if [ -z "$FFMPEG_BIN" ]; then
-    echo "WARNING: ffmpeg not found on PATH — waveform and normalize will not work"
+    echo "WARNING: ffmpeg not found on PATH, so it is not bundled"
 else
     cp "$FFMPEG_BIN" dist/audiocrate/ffmpeg
 fi
 
-# 2. Build AppDir structure
-echo ">>> Building AppDir..."
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin"
 mkdir -p "$APPDIR/usr/lib"
 mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
-# Copy PyInstaller output
 cp -r dist/audiocrate/* "$APPDIR/usr/bin/"
 
-# Move the actual executable up one level so AppRun can find it
+# AppRun starts the executable under this name
 mv "$APPDIR/usr/bin/audiocrate" "$APPDIR/usr/bin/audiocrate.bin"
 
-# 3. AppRun
 cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "$0")")"
@@ -43,7 +36,6 @@ exec "$HERE/usr/bin/audiocrate.bin" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
-# 4. .desktop file
 cat > "$APPDIR/$APP.desktop" << EOF
 [Desktop Entry]
 Name=AudioCrate
@@ -55,12 +47,11 @@ Comment=Music player
 EOF
 cp "$APPDIR/$APP.desktop" "$APPDIR/usr/share/applications/"
 
-# 5. Icon
 if [ -f "icon.png" ]; then
     cp icon.png "$APPDIR/audiocrate.png"
     cp icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/audiocrate.png"
 else
-    # Generate a placeholder icon if none exists
+    # no icon.png in the tree: draw a plain one so appimagetool has something
     python3 - << 'PYEOF'
 from PIL import Image, ImageDraw
 img = Image.new("RGBA", (256, 256), (14, 12, 20, 255))
@@ -74,9 +65,8 @@ PYEOF
     cp icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/audiocrate.png"
 fi
 
-# 6. Download appimagetool if not on PATH
 if ! command -v appimagetool &>/dev/null; then
-    echo ">>> Downloading appimagetool..."
+    echo "Downloading appimagetool..."
     curl -Lo /tmp/appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
     chmod +x /tmp/appimagetool
     APPIMAGETOOL=/tmp/appimagetool
@@ -84,9 +74,6 @@ else
     APPIMAGETOOL=appimagetool
 fi
 
-# 7. Package AppImage
-echo ">>> Packaging AppImage..."
 ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "AudioCrate-x86_64.AppImage"
 
-echo ""
-echo "✓ Done: AudioCrate-x86_64.AppImage"
+echo "Built AudioCrate-x86_64.AppImage"

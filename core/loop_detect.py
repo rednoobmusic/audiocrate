@@ -6,16 +6,16 @@ falling silent. This module recovers the real length from the rendered audio.
 
 Two independent signals, cheapest first:
 
-  1. Trailing silence  — the tune stopped playing. The end is the last audible
+  1. Trailing silence: the tune stopped playing. The end is the last audible
      sample (plus a short tail).
-  2. Loop detection    — the tune repeats forever. Compare a coarse loudness/
+  2. Loop detection: the tune repeats forever. Compare a coarse loudness/
      spectral envelope against itself at every candidate period and take the
      shortest lag whose match is strong and stable; that lag is one loop.
 
 Returns a suggested play length in seconds and how it was decided, so callers
 can prefer an authoritative source (e.g. the HVSC songlength database) and fall
-back to this only for tunes nothing knows about — new releases, private
-exports, your own music.
+back to this only for tunes nothing knows about: new releases, private
+exports and the user's own music.
 """
 from __future__ import annotations
 
@@ -41,13 +41,13 @@ _TAIL_S = 0.35             # keep a little air after the last audible sample
 @dataclass
 class LoopResult:
     length_s: float          # suggested play length
-    reason: str              # "silence" | "loop" | "full" — how it was decided
+    reason: str              # "silence" | "loop" | "full": how it was decided
     loop_s: float | None     # detected loop period, if any
     confidence: float        # 0..1
 
 
 def _envelope(mono: np.ndarray, rate: int) -> np.ndarray:
-    """Short-term RMS in dB at _FPS frames/sec — the shape we match against."""
+    """Short-term RMS in dB at _FPS frames/sec, the shape we match against."""
     hop = max(1, rate // _FPS)
     n = len(mono) // hop
     if n < 2:
@@ -62,7 +62,7 @@ def _trailing_silence(env: np.ndarray) -> int | None:
 
     Silence is the obvious case, but chip players rarely reach it: when a SID
     tune ends the player routine keeps running and the chip holds a *constant*
-    tone — measured on RoboCop 3, the envelope pins to a dead-flat −51 dB with
+    tone. Measured on RoboCop 3, the envelope pins to a dead-flat -51 dB with
     a standard deviation of exactly 0.00 and never moves again. Level alone
     can't distinguish that from a quiet passage, so the real signal is that the
     envelope stops *changing* for the whole remainder of the render.
@@ -110,7 +110,7 @@ def _autocorr(x: np.ndarray) -> np.ndarray:
 
 
 def _detect_loop(env: np.ndarray) -> tuple[float | None, float]:
-    """Loop period of the envelope, as the *fundamental* — not a multiple of it.
+    """Loop period of the envelope, as the fundamental and not a multiple of it.
 
     A looping tune correlates strongly at its loop length and at every multiple
     of it. Taking the strongest peak therefore often returns 2x/3x/4x the real
@@ -130,17 +130,17 @@ def _detect_loop(env: np.ndarray) -> tuple[float | None, float]:
     if ac.size <= min_lag:
         return None, 0.0
 
-    # Comb score: a true loop period L correlates at L, 2L, 3L… A spurious peak
-    # at 4L only correlates at 4L, 8L… so averaging over the harmonic series
-    # picks the fundamental instead of its multiples (a 23 s loop was otherwise
-    # reported as 92 s). Each lag is scored on up to _COMB_H harmonics that fit.
+    # Comb score: a true loop period L correlates at L, 2L, 3L, and so on. A spurious
+    # peak at 4L only correlates at 4L, 8L, ... so averaging over the harmonic series
+    # picks the fundamental instead of its multiples. Each lag is scored on up to
+    # _COMB_H harmonics that fit.
     n = ac.size
     best_lag, best_comb = None, 0.0
     for lag in range(min_lag, max_lag):
         hs = range(lag, n, lag)
         tot = cnt = 0.0
         for h in hs:
-            # take the local max around each harmonic — periods drift slightly
+            # take the local max around each harmonic, since periods drift slightly
             lo, hi = max(0, h - _JITTER), min(n, h + _JITTER + 1)
             tot += float(ac[lo:hi].max()); cnt += 1.0
             if cnt >= _COMB_H:
@@ -170,14 +170,14 @@ def analyze(mono: np.ndarray, rate: int, loops: int = 2,
     if env.size == 0:
         return LoopResult(cap, "full", None, 0.0)
 
-    # 1) Did it simply stop?
+    # did it simply stop?
     sil = _trailing_silence(env)
     if sil is not None:
         end = min(cap, sil / _FPS + _TAIL_S)
         if end > 0.5:
             return LoopResult(end, "silence", None, 1.0)
 
-    # 2) Does it loop?
+    # does it loop?
     loop_s, score = _detect_loop(env)
     if loop_s:
         return LoopResult(min(cap, loop_s * max(1, loops)), "loop", loop_s, score)

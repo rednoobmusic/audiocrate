@@ -1,9 +1,9 @@
-"""Milkdrop (projectM) visualizer — a dockable panel inside AudioCrate.
+"""Milkdrop (projectM) visualizer, a dockable panel inside AudioCrate.
 
 projectM renders its final composite to framebuffer 0, so it must draw to a real
-window surface — a QOpenGLWidget (which composites its own offscreen FBO) shows
-nothing. We therefore render in a QOpenGLWindow and embed it in the dock via
-QWidget.createWindowContainer, so it lives *inside* the main window.
+window surface; a QOpenGLWidget (which composites its own offscreen FBO) shows
+nothing. The view is therefore a QOpenGLWindow, embedded in the dock with
+QWidget.createWindowContainer so that it lives inside the main window.
 
 Below the view is a control bar mirroring the site's butterchurn visualizer:
 previous / next preset, shuffle toggle, lock toggle, and the current preset name.
@@ -12,16 +12,20 @@ Live mono PCM is pulled from the same analyzer that drives the spectrum/oscillos
 from __future__ import annotations
 
 import os
+import time
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QSurfaceFormat, QFont
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PySide6.QtOpenGL import QOpenGLWindow
 
+import power
 import projectm_engine as pe
 from applog import log
 
 _PCM_SAMPLES = 512                  # mono samples fed per frame
+_RESIZE_SETTLE = 0.15               # seconds the window must hold its size before projectM is told
+_BLEND = 3.2                        # a soft cut lasts 3 s (see ProjectMEngine); a resize waits it out
 _IC_PREV    = "\U000f0141"          # chevron-left
 _IC_NEXT    = "\U000f0142"          # chevron-right
 _IC_SHUFFLE = "\U000f049d"          # shuffle
@@ -35,6 +39,14 @@ class _GLViz(QOpenGLWindow):
         self._engine: pe.ProjectMEngine | None = None
         self._last_size = (0, 0)
         self._pending_preset = ""   # restore this preset once the engine exists
+        self._locked = False        # and these: the engine is made on first show, which can be
+        self._shuffle = True        # long after the saved toggles were restored
+        self._want = (0, 0)         # the size the window has now and since when, see _size_ready
+        self._changed_at = 0.0
+        self._held = False          # automatic preset changes are held while the size is moving
+        self._queued = None         # a preset button pressed meanwhile, done once it settles
+        self._last_change = 0.0     # when the preset last changed, to know if a blend may be running
+        self._last_pos = -1
 
         fmt = QSurfaceFormat()
         fmt.setVersion(3, 3)
@@ -45,8 +57,11 @@ class _GLViz(QOpenGLWindow):
         self.setFormat(fmt)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(16)   # ~60 fps
+        self._timer.setInterval(16)   # ~60 fps, slower when a frame costs more (see _paced)
         self._timer.timeout.connect(self.update)
+        self._cost = 0.0
+        self._t0 = 0.0
+        self.frameSwapped.connect(self._paced)
 
     def _fb_size(self):
         dpr = self.devicePixelRatio()
@@ -57,49 +72,101 @@ class _GLViz(QOpenGLWindow):
         try:
             w, h = self._fb_size()
             self._engine = pe.ProjectMEngine(w, h, pe.resolve_preset_dir())
-            self._last_size = (w, h)
+            self._last_size = self._want = (w, h)
             log.info("projectM %s ready: %d presets", pe.version(), self._engine.preset_count)
+            self._engine.set_shuffle(self._shuffle)
+            self._engine.set_locked(self._locked)
             self.apply_pending_preset()
             self._timer.start()
         except Exception as e:
             log.warning("projectM init failed: %s", e)
 
-    def resizeGL(self, w: int, h: int):
-        # paintGL re-syncs against the true framebuffer size too; this just reacts early.
-        if self._engine:
-            fw, fh = self._fb_size()
-            self._engine.resize(fw, fh)
-            self._last_size = (fw, fh)
+    def _size_ready(self) -> bool:
+        """projectM is told the window's size only once it has held still, never on every step of a
+        drag: each call rebuilds its render targets, and doing that while a preset blend or a preset
+        load is under way is what crashed the driver. While the size moves nothing is drawn and the
+        presets stay where they are; a blend still running is ended first."""
+        now = time.perf_counter()
+        size = self._fb_size()
+        if size != self._want:
+            self._want, self._changed_at = size, now
+        pos = self._engine.position()
+        if pos != self._last_pos:
+            self._last_pos, self._last_change = pos, now          # a change the playlist made itself
+        stale = size != self._last_size
+        moving = stale and now - self._changed_at < _RESIZE_SETTLE
+        self._hold(moving)
+        if stale and not moving:
+            if now - self._last_change < _BLEND:
+                self._engine.hard_cut_current()
+            self._engine.resize(*size)
+            self._last_size = size
+            stale = False
+        return not stale
+
+    def _hold(self, on: bool):
+        if on == self._held:
+            return
+        self._held = on
+        self._engine.set_locked(True if on else self._locked)
+        if not on and self._queued:
+            step, self._queued = self._queued, None
+            self._step(step)
+
+    def _step(self, step: str):
+        self._last_change = time.perf_counter()
+        (self._engine.next_preset if step == "next" else self._engine.prev_preset)(False)
 
     def paintGL(self):
         if not self._engine:
             return
         try:
-            size = self._fb_size()
-            if size != self._last_size:          # keep projectM's viewport == the surface
-                self._engine.resize(*size)
-                self._last_size = size
+            if not self._size_ready():
+                f = self.context().functions()
+                f.glClearColor(0.0, 0.0, 0.0, 1.0)
+                f.glClear(0x4000)                  # GL_COLOR_BUFFER_BIT
+                return
+            self._t0 = time.thread_time()
             self._engine.add_pcm_mono(self._pcm())
             self._engine.render()
         except Exception as e:
             log.warning("projectM render error: %s", e)
             self._timer.stop()
 
+    def _paced(self):
+        """Keep a frame's share of the GUI thread to about a third. The cost is the CPU time
+        from the start of the paint to the end of the swap (a driver that spins waiting for
+        the display burns it there), so the scope, the restyle after a song change and every
+        click are not queued behind a visualizer that wants the whole thread."""
+        c = time.thread_time() - self._t0
+        if not 0 < c < 0.5:
+            return
+        self._cost = self._cost * 0.8 + c * 0.2
+        ms = max(power.frame_ms(16), min(100, int(self._cost * 3000)))
+        if ms != self._timer.interval():
+            self._timer.setInterval(ms)
+
     # controls (forwarded from the panel)
     def next_preset(self):
-        if self._engine:
-            self._engine.next_preset(False)   # soft/blended, like the site's ›
+        if self._engine:                      # soft/blended, like the site's next arrow
+            self._queued = "next" if self._held else None
+            if not self._held:
+                self._step("next")
 
     def prev_preset(self):
         if self._engine:
-            self._engine.prev_preset(False)
+            self._queued = "prev" if self._held else None
+            if not self._held:
+                self._step("prev")
 
     def set_shuffle(self, on: bool):
+        self._shuffle = on
         if self._engine:
             self._engine.set_shuffle(on)
 
     def set_locked(self, on: bool):
-        if self._engine:
+        self._locked = on
+        if self._engine and not self._held:        # while held it is locked anyway, and restored after
             self._engine.set_locked(on)
 
     def preset_name(self) -> str:
@@ -240,8 +307,8 @@ class VisualizerPanel(QWidget):
             self._name.setText(fm.elidedText(name, Qt.ElideRight, max(40, self._name.width())))
             self._name.setToolTip(name)
 
-    # Render only while actually on-screen AND the app is focused — projectM is the
-    # heaviest thing in the app, so stop it when hidden/tabbed-away/minimized/unfocused.
+    # Render only while on-screen and the app is focused: projectM is the heaviest
+    # thing in the app, so it stops when hidden, tabbed away, minimized or unfocused.
     def _sync_running(self):
         run = self.isVisible() and not self._suspended
         self._gl.set_running(run)

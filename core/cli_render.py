@@ -1,13 +1,11 @@
-"""Render chiptune & tracker-module files to WAV via external CLI players, so they
-can be played through AudioCrate's normal DSP engine (full waveform / seek / DSP /
-visualizers come for free). Repurposed from the AY-Machine bot's converter approach.
+"""Render chiptune and tracker-module files to WAV with external command line players, so they
+play through the normal DSP engine like any other file.
 
-- zxtune123  → AY/YM + native ZX formats, and AY/X1 VGM that libgme can't emulate
-               (fixes the slow/looping .ay and the silent VGM exports).
-- openmpt123 → tracker modules (MOD/XM/IT/S3M/…).
+- zxtune123: AY/YM and the native ZX formats, plus AY/X1 VGM that libgme can't emulate.
+- openmpt123: tracker modules (MOD, XM, IT, S3M and so on).
 
-Multi-subsong chip formats (NSF/SPC/GBS/SAP/KSS/HES/GYM) deliberately stay on libgme
-(VgmPlayer) so the subsong navigator keeps working; this module doesn't claim them.
+Multi-subsong chip formats (NSF, SPC, GBS, SAP, KSS, HES, GYM) stay on libgme (VgmPlayer) so the
+subsong navigator keeps working; this module doesn't claim them.
 """
 from __future__ import annotations
 import shutil
@@ -17,13 +15,13 @@ from pathlib import Path
 
 _CACHE = Path.home() / ".cache" / "audiocrate" / "chiprender"
 
-# AY/YM + native ZX engines + VGM (zxtune renders these far better than libgme)
+# AY/YM, native ZX formats and VGM (zxtune renders these better than libgme)
 _ZXTUNE_EXTS = {
     ".ay", ".ym", ".vtx", ".pt1", ".pt2", ".pt3", ".stc", ".st1", ".st3",
     ".psg", ".asc", ".ftc", ".gtr", ".psc", ".sqt", ".chi", ".tfc", ".tfd",
     ".tfe", ".sqd", ".str", ".ayc", ".vgm", ".vgz",
 }
-# Tracker modules via libopenmpt's CLI
+# tracker modules, via libopenmpt's command line player
 _OPENMPT_EXTS = {
     ".mod", ".xm", ".it", ".s3m", ".mptm", ".mtm", ".669", ".far", ".ult",
     ".okt", ".med", ".ptm", ".dbm", ".digi", ".amf", ".dsm", ".mt2", ".stm",
@@ -55,8 +53,7 @@ def _cache_path(src: Path) -> Path:
 
 
 def render(src, timeout: int = 180) -> str | None:
-    """Render ``src`` to a cached WAV and return its path (or None on failure).
-    Blocking — call off the UI thread. Re-uses the cache on repeat plays."""
+    """Render ``src`` to a cached WAV and return its path, or None on failure. Blocks, so call it off the UI thread."""
     src = Path(src)
     tool = tool_for(src.suffix)
     if tool is None:
@@ -73,8 +70,8 @@ def render(src, timeout: int = 180) -> str | None:
             cmd = ["zxtune123", "--wav", f"filename={produced}", str(src)]
         else:
             # openmpt123 --render writes "<input>.wav" next to the input; stage a
-            # link in the cache dir so the output lands there (and the source folder
-            # stays clean), then move it to the canonical cache name.
+            # link in the cache dir so the output lands there and the source folder
+            # stays clean, then move it to the cache name.
             link = _CACHE / (out.stem + src.suffix.lower())
             try:
                 if link.exists() or link.is_symlink():

@@ -2,7 +2,7 @@ _QSS_TEMPLATE = """
 QMainWindow, QWidget {{
     background: {bg};
     color: {fg};
-    font-family: "JetBrainsMonoNL Nerd Font Propo", "JetBrainsMono Nerd Font Propo", {text_font} monospace;
+    font-family: {text_font}"JetBrainsMonoNL Nerd Font Propo", "JetBrainsMono Nerd Font Propo", "JetBrains Mono", monospace;
     font-size: {ui_size}px;
 }}
 QDockWidget {{
@@ -15,22 +15,32 @@ QDockWidget {{
 QDockWidget::title {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {title_top}, stop:1 {title_bot});
     padding: 4px 8px;
-    border-bottom: 1px solid {border};
+    border-bottom: 1px solid {panel_border};
 }}
 QDockWidget::close-button, QDockWidget::float-button {{
     background: transparent;
     border: none;
     padding: 2px;
 }}
+QFrame#dock_titlebar {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bar_top}, stop:1 {bar_bot});
+    border: 1px solid {panel_border};
+}}
+QFrame#dock_titlebar QLabel {{ background: transparent; }}
+QFrame#panel_frame {{
+    background: transparent;
+    border: 1px solid {panel_border};
+    border-top: none;
+}}
 QTabWidget::pane {{
-    border: 1px solid {border};
+    border: 1px solid {panel_border};
     background: {bg2};
 }}
 QTabBar::tab {{
     background: {bg2};
     color: {fg_dimmer};
     padding: 5px 14px;
-    border: 1px solid {border};
+    border: 1px solid {panel_border};
     border-bottom: none;
     margin-right: 2px;
 }}
@@ -118,14 +128,44 @@ QScrollBar::handle:horizontal {{
 }}
 QScrollBar::handle:horizontal:hover {{ background: {accent_d}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
-QSplitter::handle {{ background: {border}; }}
-QMenuBar {{ background: {bg}; border-bottom: 1px solid {border}; }}
+QSplitter::handle {{ background: {panel_border}; }}
+QMenuBar {{ background: {bg}; border-bottom: 1px solid {panel_border}; }}
+{separator_rule}
 QMenuBar::item {{ padding: 4px 10px; }}
 QMenuBar::item:selected {{ background: {bg3}; }}
 QMenu {{ background: {bg2}; border: 1px solid {border}; padding: 4px; }}
 QMenu::item {{ padding: 5px 24px 5px 12px; border-radius: 3px; }}
 QMenu::item:selected {{ background: {sel}; }}
 QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}
+QLabel#settings_section {{ color: {accent_l}; font-weight: bold; }}
+QLabel#settings_hint {{ color: {fg_dim}; placeholder-text-color: {fg_dim}; }}
+QFrame#settings_rule {{ background: {border}; border: none; min-height: 1px; max-height: 1px; }}
+QPushButton#settings_nav {{ padding: 5px 4px; }}
+QCheckBox {{ spacing: 8px; }}
+QCheckBox::indicator {{
+    width: 14px; height: 14px;
+    background: {bg2};
+    border: 1px solid {border};
+    border-radius: 3px;
+}}
+QCheckBox::indicator:hover {{ border-color: {accent}; }}
+QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent_l}; }}
+QComboBox {{
+    background: {bg2};
+    color: {fg};
+    border: 1px solid {border};
+    border-radius: 3px;
+    padding: 3px 6px;
+    selection-background-color: {sel};
+}}
+QComboBox:hover, QComboBox:focus, QComboBox:on {{ border-color: {accent}; }}
+QComboBox::drop-down {{ width: 18px; }}
+QComboBox QAbstractItemView {{
+    background: {bg2};
+    border: 1px solid {border};
+    selection-background-color: {sel};
+    outline: none;
+}}
 QLabel#track_title  {{ font-size: 15px; font-weight: bold; color: {fg}; }}
 QLabel#track_sub    {{ font-size: 12px; color: {fg_dimmer}; }}
 QLabel#time_label   {{ font-size: 12px; color: {fg_dim}; font-family: monospace; }}
@@ -142,7 +182,6 @@ QToolTip {{
 }}
 """
 
-_DEFAULT_TEXT_FONT = "\"JetBrains Mono\","  # trailing comma — sits before monospace fallback
 
 _DEFAULT_PALETTE = {
     "bg":        "#0e0c14",
@@ -165,7 +204,7 @@ from PySide6.QtGui import QColor
 
 
 def _hsv(h: int, s: int, v: int) -> QColor:
-    """Build a colour from HSV, tolerating achromatic (hue == -1) inputs."""
+    """HSV colour; a hue of -1 (achromatic, as QColor reports it) is taken as 0."""
     c = QColor()
     c.setHsv(max(0, h), max(0, min(255, s)), max(0, min(255, v)))
     return c
@@ -179,16 +218,26 @@ def make_qss(
     bg: str | None = None,
     text: str | None = None,
     frame_shade: int = 0,
+    borders: bool = True,
+    style: str = "default",
 ) -> str:
     """Build the stylesheet for AudioCrate's own (non-system) theme.
 
-    accent      — base accent hex; the accent family and (unless bg is given) a
-                  dark tint of the whole background derive from it.
-    bg          — explicit base background hex; bg2/bg3/border derive from it.
-    text        — explicit foreground hex; dim variants derive from it.
-    frame_shade — 0-100 gradient darkening on dock title bars.
-    palette     — album-art palette (full dict); overrides accent/bg/text.
+    accent      base accent hex; the accent family and (unless bg is given) a
+                dark tint of the whole background derive from it.
+    bg          explicit base background hex; bg2/bg3/border derive from it.
+    text        explicit foreground hex; dim variants derive from it.
+    frame_shade 0-100 vertical gradient on panel title bars: lighter on top, darker below.
+    borders     False makes the lines between panels (title underlines, tab frames,
+                splitter handles, dock separators) transparent.
+    palette     album-art palette (full dict); overrides accent/bg/text.
+    style       "aero" for the Frutiger Aero look (theme_aero.py); frame_shade does not apply.
     """
+    if style == "aero":
+        import theme_aero
+        return theme_aero.make_qss(palette, accent, bg, text, text_font,
+                                   ui_size if ui_size is not None else _DEFAULT_UI_SIZE,
+                                   borders, DEFAULT_ACCENT)
     merged = dict(_DEFAULT_PALETTE)
     if palette:
         merged.update(palette)
@@ -202,9 +251,9 @@ def make_qss(
             merged["sel"]      = base.darker(300).name()
             merged["border"]   = base.darker(330).name()
 
-        # Background: an explicit pick wins; otherwise a custom accent also tints
-        # the background (dark shades sharing the accent's hue), so changing the
-        # accent visibly affects the whole window — not just the highlights.
+        # An explicit background wins. Otherwise a custom accent also tints the
+        # background (dark shades of the accent's hue), so it changes the whole
+        # window and not just the highlights.
         if bg:
             bb = QColor(bg)
             h, s, v, _ = bb.getHsv()
@@ -230,11 +279,23 @@ def make_qss(
     shade = max(0, min(100, int(frame_shade)))
     p = {k: c.name() for k, c in cols.items()}
 
-    # frame shading: a vertical gradient on dock title bars (top normal → darker).
+    # frame shading: vertical gradient on the dock title bars, normal on top, darker below
     p["title_top"] = cols["bg2"].name()
     p["title_bot"] = cols["bg2"].darker(100 + shade * 2).name()
+    # Every dock has its own title bar widget (ui/main_window.py), so QDockWidget::title above is never
+    # drawn; the bar is the frame #dock_titlebar. Both ends are the window colour at 0, so nothing changes
+    # until the slider moves.
+    p["bar_top"] = cols["bg"].lighter(100 + shade * 2).name()
+    p["bar_bot"] = cols["bg"].darker(100 + shade * 2).name()
 
-    tf = f'"{text_font}",' if text_font else _DEFAULT_TEXT_FONT
+    # The lines between panels: the dock title underline, tab frames, the splitter
+    # handle, the menu bar underline and the strips Qt draws between docked panels.
+    # Off, they keep their size and turn transparent, so nothing shifts.
+    p["panel_border"] = p["border"] if borders else "transparent"
+    p["separator_rule"] = "" if borders else "QMainWindow::separator {{ background: transparent; }}".format()
+
+    # chosen font first; the bundled Nerd Font after it still supplies the icon glyphs
+    tf = f'"{text_font}", ' if text_font else ""
     sz = ui_size if ui_size is not None else _DEFAULT_UI_SIZE
     return _QSS_TEMPLATE.format(**p, text_font=tf, ui_size=sz)
 

@@ -10,15 +10,18 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from player import Player
 from player import extract_art
+import logs
+
+_log = logs.get("discord")
 
 try:
     from PIL import Image, ImageOps, ImageFilter
 except Exception:
     Image = ImageOps = ImageFilter = None
 
-# pypresence ≥4.6 wants an ActivityType enum (it does `activity_type.value`); passing
-# the raw int 2 raises AttributeError and silently kills every update. Use the enum
-# when available, else omit it (presence falls back to the default "Playing" type).
+# pypresence 4.6 and later wants an ActivityType enum (it reads `activity_type.value`); the
+# raw int 2 raises AttributeError and silently kills every update. Without the enum the
+# type is left out and presence shows the default "Playing".
 try:
     from pypresence import ActivityType as _ActivityType
     _LISTENING = _ActivityType.LISTENING
@@ -27,13 +30,10 @@ except Exception:
 
 
 class DiscordRPCService(QObject):
-    """
-    Optional Discord Rich Presence bridge.
-    Uses pypresence when available; otherwise stays inactive.
-    """
+    """Discord Rich Presence bridge. Uses pypresence when it is installed, otherwise does nothing."""
 
-    # Emitted from an upload worker when art lands on the server, so we re-publish
-    # with the now-fetchable large_image (queued → runs on the main thread).
+    # Emitted from an upload worker when art lands on the server, so we publish again
+    # with the large_image that can now be fetched (queued, so it runs on the main thread).
     _art_ready = Signal()
 
     def __init__(self, player: Player, parent: QObject | None = None):
@@ -46,13 +46,18 @@ class DiscordRPCService(QObject):
         self._uploading: set[str] = set()
         self._rpc = None
         self._connected = False
+        self._busy = threading.Lock()       # one send at a time, see _publish
+        self._again = False
         self._last_sent = 0.0
         self._min_update_sec = 3.0
         self._last_payload_key = None
         self._play_anchor_ts: int | None = None
         self._art_base_url = ""
         self._art_cache_dir = Path.home() / ".cache" / "audiocrate" / "discord_art"
-        self._art_cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._art_cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:                           # no cover art for Discord, but the program still starts
+            pass
         self._art_url_cache: dict[str, str] = {}
 
         self._defer_timer = QTimer(self)
@@ -84,14 +89,13 @@ class DiscordRPCService(QObject):
         self._publish(force=True)
 
     def _on_position(self, _frac: float, _pos_ms: int, _dur_ms: int):
-        # Seek detection: only push when timeline anchor should change.
+        # a jump in position is a seek: move the timeline anchor and push it
         prev = self._last_pos_ms
         self._last_pos_ms = _pos_ms
         if prev >= 0 and abs(_pos_ms - prev) > 1800:
             self._play_anchor_ts = int(time.time() - (_pos_ms / 1000.0))
             self._publish(force=True)
             return
-        # Position-only updates are unnecessary unless we need to refresh after seek.
 
     def _reconnect(self):
         self._clear()
@@ -108,17 +112,37 @@ class DiscordRPCService(QObject):
     def _publish(self, force: bool = False):
         if not self._enabled or not self._client_id:
             return
-        if not self._connected:
-            self._reconnect()
-            if not self._connected:
-                return
         now = time.time()
         wait = self._min_update_sec - (now - self._last_sent)
         if wait > 0:
             if force and not self._defer_timer.isActive():
                 self._defer_timer.start(max(1, int(wait * 1000)))
             return
+        # Connecting, reading and resizing the cover, and the round trip to Discord can each
+        # take long enough to freeze the window on every song change, so they run on
+        # their own thread, one at a time; a change that arrives meanwhile is sent after.
+        if self._busy.acquire(blocking=False):
+            threading.Thread(target=self._publish_thread, args=(force,), daemon=True).start()
+        else:
+            self._again = True
 
+    def _publish_thread(self, force: bool):
+        try:
+            while True:
+                self._again = False
+                self._publish_now(force)
+                if not self._again:
+                    return
+                force = True
+        finally:
+            self._busy.release()
+
+    def _publish_now(self, force: bool):
+        if not self._connected:
+            self._reconnect()
+            if not self._connected:
+                return
+        now = time.time()
         track = self._player.current
         if track is None:
             self._clear_presence_only()
@@ -126,7 +150,7 @@ class DiscordRPCService(QObject):
             self._last_payload_key = None
             return
         if not self._player.is_playing:
-            # Presence starts with active playback only.
+            # presence is shown during playback only
             self._clear_presence_only()
             self._last_sent = now
             self._last_payload_key = None
@@ -149,13 +173,13 @@ class DiscordRPCService(QObject):
             "state": " - ".join(state_bits)[:128],
         }
         if _LISTENING is not None:
-            payload["activity_type"] = _LISTENING   # "Listening to …"
+            payload["activity_type"] = _LISTENING   # "Listening to ..."
         art_url = self._external_art_url(track.path)
         if art_url:
             payload["large_image"] = art_url
             payload["large_text"] = (track.album or track.title or track.path.stem)[:128]
 
-        # start + end give Discord a live "X:XX remaining" countdown bar.
+        # start and end give Discord a live "X:XX remaining" bar
         if self._play_anchor_ts is None or force:
             self._play_anchor_ts = int(time.time() - (self._player.position_ms / 1000.0))
         payload["start"] = self._play_anchor_ts
@@ -164,7 +188,7 @@ class DiscordRPCService(QObject):
             remaining_ms = dur_ms - self._player.position_ms
             payload["end"] = int(time.time() + max(0, remaining_ms / 1000.0))
 
-        # Exclude "end" from dedup key — it changes every second by design.
+        # "end" is left out of the dedup key because it changes every second
         static_key = tuple((k, v) for k, v in sorted(payload.items()) if k != "end")
         if not force and static_key == self._last_payload_key:
             return
@@ -186,8 +210,8 @@ class DiscordRPCService(QObject):
         filename = self._write_art_file(track_path)
         if not filename:
             return None
-        # If an upload command is set, only advertise the URL once the file is
-        # confirmed on the server — otherwise Discord fetches a 404 and caches it.
+        # With an upload command set, the URL is given out only once the file is on the
+        # server, otherwise Discord fetches a 404 and caches it.
         if self._art_upload_cmd and filename not in self._uploaded:
             self._start_upload(filename)
             return None
@@ -206,14 +230,18 @@ class DiscordRPCService(QObject):
             ok = False
             try:
                 r = subprocess.run(cmd, shell=True, timeout=45,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 ok = (r.returncode == 0)
-            except Exception:
+                if not ok:
+                    _log.warning("album art upload failed (exit %s): %s", r.returncode,
+                                 r.stderr.decode("utf-8", "replace").strip()[-300:] or "no output")
+            except Exception as e:
+                _log.warning("album art upload failed: %s", e)
                 ok = False
             self._uploading.discard(filename)
             if ok:
                 self._uploaded.add(filename)
-                self._art_ready.emit()   # re-publish now that the art is fetchable
+                self._art_ready.emit()   # publish again, the art can be fetched now
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -232,8 +260,8 @@ class DiscordRPCService(QObject):
             S = 1024
             with Image.open(BytesIO(blob)) as im:
                 im = im.convert("RGB")
-                # Show the WHOLE cover centred (don't crop non-square art). Fill the
-                # square with a blurred cover of itself so there are no empty bars.
+                # show the whole cover centred, not cropped, and fill the rest of the
+                # square with a blurred copy of it so there are no empty bars
                 bg = ImageOps.fit(im, (S, S), Image.Resampling.LANCZOS)
                 bg = bg.filter(ImageFilter.GaussianBlur(24))
                 fg = im.copy()

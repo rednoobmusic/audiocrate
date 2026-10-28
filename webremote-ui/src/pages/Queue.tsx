@@ -55,7 +55,7 @@ export function Queue() {
             )}
 
             <div className="ac-section-head">
-              Up next · {upNext.length} {state?.shuffle ? '(shuffled)' : ''}
+              Up next: {upNext.length} {state?.shuffle ? '(shuffled)' : ''}
             </div>
             <IonList>
               {upNext.map((t, n) => (

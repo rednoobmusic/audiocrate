@@ -8,8 +8,7 @@ from typing import Callable
 import numpy as np
 from PySide6.QtGui import QColor
 
-# LRU-capped: without a bound, queueing a huge folder retained every palette
-# ever computed for the process lifetime.
+# LRU-capped so a huge queued folder cannot keep every palette alive
 _palette_cache: OrderedDict[str, dict[str, str] | None] = OrderedDict()
 _PALETTE_CACHE_MAX = 512
 _cache_lock = threading.Lock()
@@ -18,8 +17,9 @@ _cache_lock = threading.Lock()
 def _dominant(data: bytes) -> tuple[int, int, int] | None:
     try:
         from PIL import Image
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-        img = img.resize((48, 48), Image.LANCZOS)
+        img = Image.open(io.BytesIO(data))
+        img.draft("RGB", (96, 96))          # a JPEG decodes at reduced size
+        img = img.convert("RGB").resize((48, 48), Image.LANCZOS)
         arr = np.array(img, dtype=np.float32).reshape(-1, 3)
 
         # Fast median-cut: repeatedly halve the widest colour channel
@@ -70,7 +70,7 @@ def _derive_palette(r: int, g: int, b: int) -> dict[str, str]:
         return c.name()
 
     def _fg(v_target: float, s_tint: float = 0.08) -> str:
-        # Near-white with a subtle hue tint for readability
+        # near-white with a faint hue tint
         c = QColor.fromHsvF(h, s_tint, v_target)
         return c.name()
 
@@ -94,10 +94,7 @@ def get_palette_for_path(
     art_data: bytes | None,
     callback: Callable[[dict[str, str] | None], None],
 ):
-    """
-    Return the palette for path via callback.
-    Uses a cache keyed by path so each file is only decoded once.
-    """
+    """Hand the palette for path to callback, from a worker thread, or at once on a cache hit. Cached by path."""
     key = str(path)
     with _cache_lock:
         if key in _palette_cache:

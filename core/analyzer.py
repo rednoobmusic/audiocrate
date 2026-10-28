@@ -50,6 +50,7 @@ class Analyzer:
 
         self._audio:     np.ndarray | None = None
         self._lock       = threading.Lock()
+        self._gen        = 0          # one per load_track; a decode for an older one is stopped and dropped
 
         self._smooth     = np.zeros(BANDS, dtype=np.float32)
         self._peaks      = np.zeros(BANDS, dtype=np.float32)
@@ -66,7 +67,7 @@ class Analyzer:
         self._live_buf   = np.zeros(0, dtype=np.float32)
         self._live_max   = _RATE * 3
         # Engine-source mode: pull the window straight from the playback engine's
-        # decoded buffer (no separate decode → no lag on track change).
+        # decoded buffer, so there is no separate decode and no lag on track change.
         self._engine_src = None
 
     def set_chunk(self, chunk: int):
@@ -86,6 +87,7 @@ class Analyzer:
             self._live = bool(on)
             if on:
                 self._audio = None
+                self._gen += 1
             self._live_buf = np.zeros(0, dtype=np.float32)
         self._band_ceil[:] = -_REF_DB
         self._smooth[:] = 0
@@ -93,13 +95,14 @@ class Analyzer:
         self._last_hop  = -1
 
     def set_engine_source(self, fn):
-        """fn(position_ms, n) -> mono window (or None). When set, the scope/spectrum
-        read from the engine instead of decoding the file separately."""
+        """fn(position_ms, n) -> mono window or None. When set, the scope and spectrum read from
+        the engine instead of decoding the file separately."""
         self._engine_src = fn
         if fn is not None:
             with self._lock:
                 self._audio = None
                 self._live = False
+                self._gen += 1
         self._band_ceil[:] = -_REF_DB
         self._smooth[:] = 0
         self._peaks[:]  = 0
@@ -122,27 +125,42 @@ class Analyzer:
             self._audio = None
             self._live = False
             self._live_buf = np.zeros(0, dtype=np.float32)
+            self._gen += 1
+            gen = self._gen
         self._band_ceil[:] = -_REF_DB
         self._smooth[:] = 0
         self._peaks[:]  = 0
-        threading.Thread(target=self._decode, args=(path,), daemon=True).start()
+        threading.Thread(target=self._decode, args=(path, gen), daemon=True).start()
 
-    def _decode(self, path: Path):
+    def _decode(self, path: Path, gen: int):
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 ["ffmpeg", "-i", str(path),
                  "-f", "f32le", "-ar", str(_RATE), "-ac", "1", "-vn", "-"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
-            data = np.frombuffer(proc.stdout, dtype=np.float32).copy()
+            done = threading.Event()
+
+            def watch():                  # a newer track, or stop(): do not decode to the end for nobody
+                while not done.wait(0.05):
+                    if gen != self._gen:
+                        proc.kill()
+                        return
+            threading.Thread(target=watch, daemon=True).start()
+            try:
+                raw = proc.communicate()[0]
+            finally:
+                done.set()
+            data = np.frombuffer(raw, dtype=np.float32).copy()
         except Exception:
             return
         with self._lock:
-            self._audio = data
+            if gen == self._gen:
+                self._audio = data
 
     def _fft_bands(self, chunk: np.ndarray) -> np.ndarray:
-        """FFT one analysis chunk → normalised per-band magnitudes (0..1)."""
+        """FFT one analysis chunk into normalised per-band magnitudes (0..1)."""
         chunk = chunk.copy()
         chunk[1:] -= self._pre * chunk[:-1]
 
@@ -273,5 +291,6 @@ class Analyzer:
     def stop(self):
         with self._lock:
             self._audio = None
+            self._gen += 1
         self._smooth[:] = 0
         self._peaks[:] = 0

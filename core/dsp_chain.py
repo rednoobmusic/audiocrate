@@ -1,19 +1,17 @@
 """Real-time port of the website's Web Audio enhancer (site/src/lib/audioEnhancer.ts).
 
-Everything here is plain numpy/scipy so it can run per-buffer inside the audio
-engine with sample-accurate state continuity. The signal graph mirrors the
-original exactly:
+Plain numpy/scipy, run per buffer inside the audio engine with the filter state carried across buffers.
 
   ENABLED (wet):
-    EQ chain   : lowshelf 55 → peak 4.2k → peak 6k → highshelf 9.5k → highshelf 14k
+    EQ chain   : lowshelf 90 Hz, peak 280, peak 4.2k, peak 6k, highshelf 9.5k, highshelf 14k
     + parallel : splash exciter (8k), air exciter (12k), bass body, sub-harmonic,
                  mid saturation         (each tanh/abs shaped, summed in)
-    + M/S widener (mono <120 Hz, sides widened above)
+    + M/S widener (mono below 120 Hz, sides widened above)
     + soft limiter
-  DISABLED: true bypass (raw audio) — matches the on/off button.
+  DISABLED: true bypass (raw audio), matching the on/off button.
 
-Per-track "adaptive gain" is reproduced by measuring the high/low spectral ratio
-once on load (the site measures it live every 800 ms) and picking the same tiers.
+The site's per-track "adaptive gain" is done by measuring the high/low spectral ratio once on load (the site
+measures it live every 800 ms) and picking the same tiers.
 """
 from __future__ import annotations
 import numpy as np
@@ -30,9 +28,8 @@ def _biquad(kind: str, f0: float, q: float, gain_db: float, fs: int = _FS):
     A = 10.0 ** (gain_db / 40.0)
 
     if kind in ("lowshelf", "highshelf"):
-        # Q controls shelf steepness/resonance. q = 1/√2 ≈ 0.707 reproduces the
-        # classic S=1 shelf exactly (so the Enhance DSP shelves are unchanged);
-        # higher Q narrows/steepens the shelf transition.
+        # alpha comes from Q instead of the shelf slope S: q = 1/sqrt(2) is the classic S=1
+        # shelf, a higher Q makes the transition steeper.
         alpha = sw / (2.0 * q)
         sa = 2.0 * np.sqrt(A) * alpha
         if kind == "lowshelf":
@@ -76,7 +73,7 @@ def _biquad(kind: str, f0: float, q: float, gain_db: float, fs: int = _FS):
 
 
 class _BQ:
-    """Stereo biquad with persistent state (so buffers join seamlessly)."""
+    """Stereo biquad whose filter state carries over from one buffer to the next."""
 
     def __init__(self, kind, f0, q=0.707, gain_db=0.0, fs=_FS):
         self._fs = fs
@@ -119,36 +116,32 @@ def high_ratio(mono: np.ndarray, fs: int = _FS) -> float:
     hop = n // 2
     frames = 1 + (mono.size - n) // hop
     frames = min(frames, 4000)
+    # A few big FFT calls instead of up to 4000 small ones. This runs on a worker
+    # thread at the start of every track (and again for the preloaded next one),
+    # and a loop of tiny numpy calls takes the interpreter lock back after each,
+    # which is what the GUI and the audio feed then wait behind.
+    view = np.lib.stride_tricks.sliding_window_view(mono, n)[::hop][:frames]
     acc = np.zeros(n // 2 + 1)
-    count = 0
-    for i in range(0, frames * hop, hop):
-        seg = mono[i:i + n]
-        if seg.size < n:
-            break
-        mag = np.abs(np.fft.rfft(seg * win)) / n
-        acc += mag
-        count += 1
-    if count == 0:
-        return 0.4
-    mag = acc / count
+    for i in range(0, frames, 500):
+        acc += np.abs(np.fft.rfft(view[i:i + 500] * win, axis=1)).sum(axis=0) / n
+    mag = acc / frames
     db = 20.0 * np.log10(mag + 1e-12)
-    byt = np.clip(255.0 * (db + 100.0) / 70.0, 0.0, 255.0)  # [-100,-30] dB → [0,255]
+    byt = np.clip(255.0 * (db + 100.0) / 70.0, 0.0, 255.0)  # [-100,-30] dB -> [0,255]
     lo = byt[2:11].sum() / 9.0
     hi = byt[46:141].sum() / 95.0
     return float(hi / (lo + 1.0))
 
 
 class Enhancer:
-    """Faithful real-time port of createEnhancer(). process() is a no-op passthrough
-    when disabled, and the full wet graph when enabled."""
+    """Real-time port of createEnhancer(). process() passes the block through when disabled and runs the
+    full wet graph when enabled."""
 
     def __init__(self, fs: int = _FS):
         self._fs = fs
         self._enabled = False
 
-        # EQ chain. The low shelf now sits at 90 Hz so it lifts bass *body*, not
-        # just sub; a warmth band restores low-mid richness; the high shelves are
-        # eased a touch so air doesn't swamp the mids/bass.
+        # EQ chain: the low shelf at 90 Hz lifts bass body and not just sub, the warmth band adds
+        # low-mid body, and the high shelves are eased so air does not swamp the mids and bass.
         self._subShelf  = _BQ("lowshelf", 90, gain_db=2.5, fs=fs)
         self._warmth    = _BQ("peaking", 280, 0.7, 2.0, fs)   # low-mid body
         self._presence  = _BQ("peaking", 4200, 1.1, 2.5, fs)
@@ -166,42 +159,39 @@ class Enhancer:
         self._airShelf  = _BQ("highshelf", 13000, gain_db=4.5, fs=fs)
         self._airLevel  = 0.09
 
-        # Bass body exciter (60–200 → tanh → 900 LP)
+        # Bass body exciter (60-200 -> tanh -> 900 LP)
         self._bassHpf   = _BQ("highpass", 60, 0.5, fs=fs)
         self._bassLpf   = _BQ("lowpass", 200, 0.5, fs=fs)
         self._bassOutLp = _BQ("lowpass", 900, 0.5, fs=fs)
         self._bassLevel = 0.07
 
-        # Sub-harmonic synth (40–80 → rectify → 80–280 BP)
+        # Sub-harmonic synth (40-80 -> rectify -> 80-280 BP)
         self._subHpf    = _BQ("highpass", 40, 0.5, fs=fs)
         self._subLpf    = _BQ("lowpass", 80, 0.5, fs=fs)
         self._subBpHp   = _BQ("highpass", 80, 0.8, fs=fs)
         self._subBpLp   = _BQ("lowpass", 280, 0.8, fs=fs)
         self._subHarmLevel = 0.04
 
-        # Mid saturation (mono 300–4k → tanh)
+        # Mid saturation (mono 300-4k -> tanh)
         self._midBpHp   = _BQ("highpass", 300, 0.6, fs=fs)
         self._midBpLp   = _BQ("lowpass", 4000, 0.6, fs=fs)
         self._midLevel  = 0.08
 
-        # Stereo widener. Operate on the SIDE channel only — the (full-range) mid
-        # is passed through untouched, so there's no LP/HP crossover notch eating
-        # the bass/body. High-passing the side mono-izes the lows and a small
-        # boost widens the highs.
+        # Stereo widener. It works on the side channel only; the full-range mid passes
+        # untouched, so no LP/HP crossover notch eats the bass and body. High-passing
+        # the side makes the lows mono and a small boost widens the highs.
         self._XO = 120
         self._W = 0.35
         self._sideHp = _BQ("highpass", self._XO, 0.707, fs=fs)
 
 
-        # Wet-path headroom: the EQ chain + exciters add ~4-5 dB of energy, which
-        # drove already-loud masters straight into the limiter/clip stage every
-        # block (audible as constant clipping). Trim the enhanced mix back down so
-        # the limiter is a rare safety net, not part of the steady-state sound.
+        # Wet-path headroom: the EQ chain and exciters add about 4-5 dB of energy, which
+        # drove loud masters into the limiter on every block (audible as constant
+        # clipping). The trim keeps the limiter a rare safety net.
         self._wet_trim = 10.0 ** (-4.5 / 20.0)
 
-        # Safety limiter — only catches peaks near 0 dBFS. Instant attack,
-        # ~80 ms release (a fast release here acts like a per-sample waveshaper
-        # and *creates* distortion instead of preventing it).
+        # Safety limiter, only for peaks near 0 dBFS. Instant attack, ~80 ms release (a fast
+        # release acts like a per-sample waveshaper and creates distortion).
         self._lim_thr = 10.0 ** (-1.0 / 20.0)    # ~-1 dBFS
         self._lim_ratio = 20.0
         rel = np.exp(-1.0 / (0.080 * fs))
@@ -209,7 +199,6 @@ class Enhancer:
         self._lim_a = np.array([1.0, -rel])
         self._lim_zi = np.zeros(1)
 
-    # controls
     def set_enabled(self, on: bool):
         self._enabled = bool(on)
 
@@ -226,16 +215,15 @@ class Enhancer:
             "highshelf", 9500)
         self._splashLevel = 0.05 if r > 0.6 else 0.08 if r > 0.4 else 0.10 if r > 0.2 else 0.14
         self._airLevel    = 0.04 if r > 0.6 else 0.06 if r > 0.4 else 0.09 if r > 0.2 else 0.13
-        # Always keep some bass body (floor 1.5 dB) — never zero it out.
+        # keep some bass body (floor 1.5 dB), never zero it out
         self._subShelf.set_gain(
             3.0 if r > 0.6 else 2.5 if r > 0.4 else 2.0 if r > 0.2 else 1.5,
             "lowshelf", 90)
         self._bassLevel    = 0.07 if r > 0.6 else 0.06 if r > 0.4 else 0.05 if r > 0.2 else 0.04
         self._subHarmLevel = 0.04 if r > 0.6 else 0.03 if r > 0.4 else 0.022 if r > 0.2 else 0.015
 
-    # per-buffer processing
     def process(self, block: np.ndarray) -> np.ndarray:
-        """block: (N, 2) float32 → (N, 2) float32."""
+        """block: (N, 2) float32 in, (N, 2) float32 out."""
         if not self._enabled:
             return block
 
@@ -263,13 +251,13 @@ class Enhancer:
 
         mix = (wet + splash + air + bass + subh + mid) * self._wet_trim
 
-        # Stereo widener (mid untouched; side high-passed → mono bass, widened highs)
+        # Stereo widener (mid untouched; side high-passed, so the bass is mono and the highs wider)
         mid  = 0.5 * (mix[:, 0] + mix[:, 1])
         side = 0.5 * (mix[:, 0] - mix[:, 1])
         side = self._sideHp.process(side[:, None])[:, 0] * (1.0 + self._W)
         out = np.stack([mid + side, mid - side], axis=1)
 
-        # Soft limiter — instant attack, ~80 ms release, ratio 6 above -3 dB
+        # Soft limiter: instant attack, ~80 ms release (threshold and ratio set in __init__)
         peak = np.maximum(np.abs(out[:, 0]), np.abs(out[:, 1]))
         sm, self._lim_zi = lfilter(self._lim_b, self._lim_a, peak, zi=self._lim_zi)
         det = np.maximum(peak, sm)
@@ -298,7 +286,7 @@ EQ_GMIN, EQ_GMAX = -24.0, 24.0
 EQ_QMIN, EQ_QMAX = 0.1, 24.0
 
 
-EQ_SLOPE_TYPES = ("lowpass", "highpass")     # types whose slope can be steepened
+EQ_SLOPE_TYPES = ("lowpass", "highpass", "lowshelf", "highshelf")   # types whose slope can be steepened
 EQ_SLOPES = (12, 24, 36, 48)                 # dB/octave (cascaded 2nd-order stages)
 
 
@@ -320,17 +308,28 @@ class EqBand:
     def _n_stages(self) -> int:
         return max(1, self.slope // 12) if self.type in EQ_SLOPE_TYPES else 1
 
+    def _stage_params(self):
+        """(type, freq, q, gain) for each stage. A shelf is one 2nd-order section at 12 dB/oct;
+        steeper, it is a cascade whose sections take the Butterworth pole Qs of the whole
+        filter and an equal share of the gain, so the plateau stays at the set gain. The Q
+        control scales them (0.707 is the plain Butterworth shape), as it does for one section."""
+        n = self._n_stages()
+        if self.type in ("lowshelf", "highshelf"):
+            return [(self.type, self.freq,
+                     self.q / (0.7071067811865476 * 2.0 * np.sin((2 * i + 1) * np.pi / (4 * n))),
+                     self.gain / n) for i in range(n)]
+        return [(self.type, self.freq, self.q, self.gain)] * n
+
     def _build(self):
-        self._stages = [_BQ(self.type, self.freq, self.q, self.gain, self._fs)
-                        for _ in range(self._n_stages())]
+        self._stages = [_BQ(*p, self._fs) for p in self._stage_params()]
 
     def refresh(self):
         # rebuild only if the stage count changed (type/slope); else keep state
         if len(self._stages) != self._n_stages():
             self._build()
         else:
-            for st in self._stages:
-                st.set_params(self.type, self.freq, self.q, self.gain)
+            for st, p in zip(self._stages, self._stage_params()):
+                st.set_params(*p)
 
     def process(self, x):
         for st in self._stages:
@@ -371,7 +370,6 @@ class ParametricEQ:
         self.input_gain = 0.0
         self.output_gain = 0.0
 
-    # processing
     def process(self, block: np.ndarray) -> np.ndarray:
         if not self.enabled or not self.bands:
             return block
@@ -392,9 +390,17 @@ class ParametricEQ:
         for b in self.bands:
             b.reset()
 
-    # display
+    def sos(self):
+        """What process() does as (second order sections, one linear gain for both trims), or None when it does nothing.
+        For measuring a whole track through this equalizer in one pass."""
+        if not self.enabled:
+            return None
+        rows = [[*st.b, 1.0, st.a[1], st.a[2]] for b in self.bands if b.enabled for st in b._stages]
+        gain = 10.0 ** ((self.input_gain + self.output_gain) / 20.0)
+        return (np.array(rows, dtype=np.float64).reshape(-1, 6), gain) if rows or gain != 1.0 else None
+
     def response_db(self, freqs: np.ndarray) -> np.ndarray:
-        """Combined magnitude response (dB) of all enabled bands + output trim."""
+        """Combined magnitude response (dB) of all enabled bands and the output trim."""
         total = np.full(len(freqs), float(self.output_gain), dtype=np.float64)
         w = 2.0 * np.pi * freqs / self._fs
         ejw = np.exp(-1j * w)
@@ -404,7 +410,6 @@ class ParametricEQ:
                 total += b.response(ejw, ejw2)
         return total
 
-    # editing
     def add_band(self, freq, gain=0.0, q=1.0, btype="peaking", slope=12) -> EqBand:
         b = EqBand(btype, freq, gain, q, True, slope, self._fs)
         self.bands.append(b)
@@ -414,7 +419,6 @@ class ParametricEQ:
         if band in self.bands:
             self.bands.remove(band)
 
-    # persistence
     def to_dict(self):
         return {
             "enabled": self.enabled,

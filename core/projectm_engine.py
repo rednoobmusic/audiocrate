@@ -1,11 +1,11 @@
-"""ctypes binding for projectM v4 (libprojectM-4) — a native Milkdrop visualizer.
+"""ctypes binding for projectM v4 (libprojectM-4), the native MilkDrop visualizer.
 
-projectM renders the same `.milk` presets Milkdrop/Butterchurn use. The v4 library
-exposes a clean C API (no C++ shim needed). This wraps the core + playlist libs and
-drives them from an OpenGL context owned by Qt (see ui/visualizer_window.py).
+projectM renders the same `.milk` presets MilkDrop and Butterchurn use. This wraps
+the core and playlist libraries and drives them from an OpenGL context owned by Qt
+(see ui/visualizer_window.py).
 
-All GL calls (create / render / resize) must happen with the target GL context
-current — the QOpenGLWidget guarantees that inside initializeGL/paintGL/resizeGL.
+All GL calls (create, render, resize) must happen with the target GL context
+current. QOpenGLWidget guarantees that inside initializeGL, paintGL and resizeGL.
 """
 from __future__ import annotations
 import ctypes
@@ -71,7 +71,7 @@ def _load():
     _pl.projectm_playlist_play_previous.argtypes = [ph, ctypes.c_bool]
     _pl.projectm_playlist_play_previous.restype  = ctypes.c_uint32
     _pl.projectm_playlist_item.argtypes = [ph, ctypes.c_uint32]
-    _pl.projectm_playlist_item.restype  = ctypes.c_void_p   # owned char* → free it ourselves
+    _pl.projectm_playlist_item.restype  = ctypes.c_void_p   # owned char*, freed with projectm_playlist_free_string
     _pl.projectm_playlist_free_string.argtypes = [ctypes.c_void_p]
     return True
 
@@ -88,9 +88,8 @@ def version() -> str:
 
 
 def resolve_preset_dir() -> str | None:
-    """First existing preset directory with .milk files. User config dir wins so the
-    site's exact presets (copied there, kept out of the release) take priority over the
-    system projectM pack."""
+    """First existing preset directory with .milk files. The user config dir wins, so
+    the site's presets (copied there, kept out of the release) beat the system pack."""
     here = os.path.dirname(os.path.abspath(__file__))
     cands = [
         os.path.expanduser("~/.config/audiocrate/presets"),
@@ -114,8 +113,8 @@ def resolve_preset_dir() -> str | None:
 
 
 class ProjectMEngine:
-    """Owns a projectM instance + its playlist. Construct/use only with a current GL
-    context (i.e. from inside QOpenGLWidget's GL callbacks)."""
+    """Owns a projectM instance and its playlist. Create and use it only with a current
+    GL context, that is from inside the QOpenGLWidget GL callbacks."""
 
     def __init__(self, width: int, height: int, preset_dir: str | None = None,
                  preset_seconds: float = 22.0, shuffle: bool = True):
@@ -177,6 +176,15 @@ class ProjectMEngine:
         if self._pl:
             _pl.projectm_playlist_play_previous(self._pl, hard)
 
+    def position(self) -> int:
+        """Index of the active preset in the playlist, so a change made on its own is noticed."""
+        return int(_pl.projectm_playlist_get_position(self._pl)) if self._pl and self._count else -1
+
+    def hard_cut_current(self):
+        """Load the active preset again with no blend, which ends a transition that is in progress."""
+        if self._pl and self._count:
+            _pl.projectm_playlist_set_position(self._pl, int(_pl.projectm_playlist_get_position(self._pl)), True)
+
     def set_preset_duration(self, seconds: float):
         if not self._pm:
             return
@@ -215,8 +223,8 @@ class ProjectMEngine:
         return name
 
     def select_preset_path(self, path: str) -> bool:
-        """Jump the playlist to the preset with this exact path (keeps next/prev
-        coherent). Returns True if found. O(n) scan — runs once on restore."""
+        """Jump the playlist to the preset with this exact path, so next and previous
+        stay coherent. Returns True if found. Linear scan, run once on restore."""
         if not self._pl or not path:
             return False
         n = int(_pl.projectm_playlist_size(self._pl))

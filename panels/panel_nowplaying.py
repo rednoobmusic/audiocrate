@@ -10,20 +10,22 @@ except ImportError:
     def _qt_valid(obj) -> bool:
         return obj is not None
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QMenu, QStackedWidget
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QMenu, QSlider, QStackedWidget
 from PySide6.QtCore    import Qt, Signal, QTimer, QPointF
 from PySide6.QtGui     import (QPixmap, QPainter, QPainterPath, QColor, QMouseEvent,
                                QRadialGradient, QTransform)
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
-from player import Player, extract_art, VIDEO_EXTS
+from player import Player, decode_art, extract_art, VIDEO_EXTS
+from steady_label import SteadyLabel
+import anim
 
 
-# Hover feel for the art. The web UI reaches the same place with a spring
-# transition; a widget that repaints itself has no transitions, so each value
-# walks a fraction of the remaining distance every frame instead. Rising and
-# falling use different rates for the same reason the stylesheet gives the glow
-# a 0.15s fade in and a 0.6s fade out: arriving should feel quicker than leaving.
+# Hover feel for the art. The web UI uses a spring transition; a widget that
+# repaints itself has none, so each value walks a fraction of the remaining
+# distance every frame. Rising and falling use different rates, like the
+# stylesheet's glow (0.15s fade in, 0.6s fade out): arriving feels quicker
+# than leaving.
 _ART_TICK_MS  = 16
 _ART_RATE_IN  = 0.34
 _ART_RATE_OUT = 0.11
@@ -36,12 +38,11 @@ _ART_GLOW_R   = 180.0     # matches the 180px circle the stylesheet paints
 _ART_TILT_X   = 9.0       # degrees at the top and bottom edges
 _ART_TILT_Y   = 12.0      # degrees at the left and right edges
 _ART_PERSP    = 400.0     # the same 400px perspective the stylesheet sets
-# ...but 400px is a viewing distance, and the site applies it to windows a few
-# hundred pixels across. Left fixed, the same tilt throws a corner half again as
-# far on a large panel as on a small one, and the art has to shrink by a third
-# to stay inside. Holding the distance proportional to the art keeps the tilt
-# looking the same at every size, which is what a fixed perspective on a fixed
-# size layout was already doing.
+# 400px is a viewing distance meant for windows a few hundred pixels across.
+# Left fixed, the same tilt throws a corner half again as far on a large panel
+# as on a small one, and the art has to shrink by a third to stay inside.
+# Keeping the distance proportional to the art makes the tilt look the same at
+# every size.
 _ART_PERSP_MIN = 1.5      # multiples of the art's own width
 
 
@@ -53,9 +54,9 @@ def _hover_extent(side: float, w: float, h: float) -> float:
     """How far past the widget the art reaches at its worst hover position.
 
     Negative means it stays inside. Every extreme of the lean and tilt is tried
-    against all four corners, because the worst case is a corner: there both
-    rotations push the perspective divisor the same way and magnify together,
-    which is what a single axis estimate keeps missing.
+    against all four corners, because the worst case is a corner: both rotations
+    push the perspective divisor the same way and magnify together, which a
+    single axis estimate misses.
     """
     if side <= 0:
         return -1.0
@@ -82,13 +83,11 @@ def _hover_extent(side: float, w: float, h: float) -> float:
 
 @lru_cache(maxsize=32)
 def _art_side(w: int, h: int) -> int:
-    """The largest art that still fits once the hover has had its way with it.
+    """The largest art side that still fits once the hover lean and tilt are applied.
 
-    Solved rather than derived. Two attempts at a closed form both came out too
-    generous, because the tilt magnifies by a factor that depends on the size
-    being solved for, so a bisection on the real transform is used instead. It
-    runs once per widget size and the result is cached, which is nothing next to
-    the repaint it feeds.
+    Found by bisection on the real transform: the tilt magnifies by a factor that
+    depends on the size being solved for, and a closed form came out too generous.
+    It runs once per widget size and the result is cached.
     """
     lo, hi = 0.0, float(min(w, h))
     if hi <= 0:
@@ -112,60 +111,37 @@ def _approach(cur: float, target: float, rate: float) -> float:
     return target if abs(target - nxt) < _ART_SETTLED else nxt
 
 
-class _MiniSeek(QWidget):
+class _MiniSeek(QSlider):
+    """The seek bar under the art. A real slider, so the style sheet themes it exactly
+    like the one in Controls (the filled part and the handle take the accent colours)."""
+
     seeked = Signal(float)
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self._frac = 0.0
+        super().__init__(Qt.Horizontal, parent)
+        self.setRange(0, 1000)
         self._dragging = False
-        self.setFixedHeight(14)
+        self.setFixedHeight(18)
         self.setCursor(Qt.PointingHandCursor)
 
     def set_position(self, frac: float):
-        self._frac = max(0.0, min(1.0, frac))
-        self.update()
+        self.blockSignals(True)
+        self.setValue(int(round(max(0.0, min(1.0, frac)) * 1000)))
+        self.blockSignals(False)
 
-    def paintEvent(self, _):
-        W, H = self.width(), self.height()
-        if W <= 0:
-            return
-        p   = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        pal = self.palette()
-        r   = 3
-        track_h = 4
-        ty  = (H - track_h) // 2
-
-        p.setBrush(pal.mid())
-        p.setPen(Qt.NoPen)
-        p.drawRoundedRect(0, ty, W, track_h, r, r)
-
-        fill_w = int(self._frac * W)
-        if fill_w > 0:
-            p.setBrush(pal.highlight())
-            p.drawRoundedRect(0, ty, fill_w, track_h, r, r)
-
-        cx = int(self._frac * (W - 1))
-        p.setBrush(pal.highlightedText())
-        p.drawEllipse(cx - 5, (H - 10) // 2, 10, 10)
-        p.end()
-
-    def _pos_frac(self, x) -> float:
-        return max(0.0, min(1.0, float(x) / max(1, self.width() - 1)))
+    def _seek_to(self, e: QMouseEvent):
+        f = max(0.0, min(1.0, float(e.position().x()) / max(1, self.width() - 1)))
+        self.set_position(f)
+        self.seeked.emit(f)
 
     def mousePressEvent(self, e: QMouseEvent):
         if e.button() == Qt.LeftButton:
             self._dragging = True
-            f = self._pos_frac(e.position().x())
-            self.set_position(f)
-            self.seeked.emit(f)
+            self._seek_to(e)
 
     def mouseMoveEvent(self, e: QMouseEvent):
         if self._dragging:
-            f = self._pos_frac(e.position().x())
-            self.set_position(f)
-            self.seeked.emit(f)
+            self._seek_to(e)
 
     def mouseReleaseEvent(self, e: QMouseEvent):
         self._dragging = False
@@ -210,6 +186,18 @@ class _ArtLabel(QLabel):
         self._scaled_key = None
         self.update()
 
+    def look(self):
+        """A function that paints the cover as it is now, for anim.hold."""
+        pm, (x, y, w, h) = self._scaled, self._art_rect()
+
+        def paint(p):
+            if pm is not None and not pm.isNull():
+                path = QPainterPath()
+                path.addRoundedRect(x, y, w, h, 12, 12)
+                p.setClipPath(path)
+                p.drawPixmap(x, y, pm)
+        return paint
+
     def set_accent(self, palette: dict | None):
         """Tint the glow with the colour taken from the album art."""
         if palette:
@@ -219,7 +207,6 @@ class _ArtLabel(QLabel):
         if self._glow > 0.0:
             self.update()
 
-    # hover
     def enterEvent(self, e):
         self._anim.start()
         super().enterEvent(e)
@@ -412,20 +399,18 @@ class NowPlayingWidget(QWidget):
         info = QVBoxLayout()
         info.setSpacing(2)
 
-        self._title = QLabel("No track loaded")
+        self._title = SteadyLabel()
+        self._title.setText("No track loaded")
         self._title.setObjectName("track_title")
         self._title.setAlignment(Qt.AlignCenter)
-        self._title.setWordWrap(True)
 
-        self._artist = QLabel("")
+        self._artist = SteadyLabel()
         self._artist.setObjectName("track_sub")
         self._artist.setAlignment(Qt.AlignCenter)
-        self._artist.setWordWrap(True)
 
-        self._album = QLabel("")
+        self._album = SteadyLabel()
         self._album.setObjectName("track_sub")
         self._album.setAlignment(Qt.AlignCenter)
-        self._album.setWordWrap(True)
 
         info.addWidget(self._title)
         info.addWidget(self._artist)
@@ -473,27 +458,25 @@ class NowPlayingWidget(QWidget):
         return self._np_video
 
     def _on_track(self, track):
-        self._title.setText(track.title or track.path.stem)
-        self._artist.setText(track.artist)
-        self._album.setText(track.album)
+        anim.set_text(self._title, track.title or track.path.stem)
+        anim.set_text(self._artist, track.artist)
+        anim.set_text(self._album, track.album)
         is_video = track.path.suffix.lower() in VIDEO_EXTS
         self._media_stack.setCurrentIndex(1 if is_video else 0)
         if not is_video:
+            anim.hold(self._art, self._art.look())
             self._art.set_pixmap(None)
             threading.Thread(target=self._load_art, args=(track.path,), daemon=True).start()
 
     def _load_art(self, path: Path):
         data = extract_art(path)
+        img = decode_art(data) if data else None
         if _qt_valid(self):
-            self._art_ready.emit(data)
+            self._art_ready.emit(img)
 
-    def _apply_art(self, data):
-        if data:
-            pm = QPixmap()
-            pm.loadFromData(data)
-            self._art.set_pixmap(pm if not pm.isNull() else None)
-        else:
-            self._art.set_pixmap(None)
+    def _apply_art(self, img):
+        self._art.set_pixmap(QPixmap.fromImage(img) if img is not None else None)
+        anim.release(self._art)
 
     def _on_position(self, frac: float, cur_ms: int, dur_ms: int):
         def fmt(ms):

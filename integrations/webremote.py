@@ -1,27 +1,24 @@
-"""Mobile web remote — serves a phone-sized AudioCrate UI over HTTP.
-
-Design notes:
+"""Mobile web remote: serves a phone-sized AudioCrate UI over HTTP.
 
 * The HTTP server runs on its own daemon thread. `Player` lives on the GUI
-  thread and is NOT thread-safe, so nothing here touches it directly:
+  thread and is not thread-safe, so nothing here touches it directly:
     - reads come from `_snap`, a plain dict rebuilt on the GUI thread by a
       QTimer and swapped under a lock;
     - writes are emitted as `command` signals, which Qt queues onto the GUI
-      thread (the same trick MPRIS relies on for its property setters).
+      thread (MPRIS relies on the same thing for its property setters).
   The only shared state crossing threads is that dict and a couple of ints.
 
 * Library browsing reads `library.db` directly with a private read-only
-  connection per thread. It's WAL, so concurrent reads are free and we never
-  have to bother the GUI thread to list 400 tracks.
+  connection per thread. The database is in WAL mode, so concurrent reads are
+  cheap and the GUI thread is never involved in listing tracks.
 
-* Auth is a PIN plus a signed session cookie (HMAC-SHA256 over an expiry, i.e.
-  the same construction as a JWT minus the ceremony). The PIN itself is stored
-  as PBKDF2, never in the clear, and the signing secret is per-install — rotate
-  it and every device is logged out. Cookies are HttpOnly + SameSite=Lax, and
-  Secure whenever the request arrived over TLS.
+* Auth is a PIN plus a signed session cookie (HMAC-SHA256 over an expiry time,
+  a minimal JWT). The PIN is stored as PBKDF2, never in the clear, and the
+  signing secret is per install: rotating it logs every device out. Cookies are
+  HttpOnly and SameSite=Lax, and Secure whenever the request arrived over TLS.
 
 Off by default. Enable with AUDIOCRATE_WEB=1 (or "web_remote": true in
-settings.json). First run prints a generated PIN to the log.
+settings.json). The first run prints a generated PIN to the log.
 """
 from __future__ import annotations
 
@@ -42,6 +39,8 @@ from urllib.parse import urlparse, parse_qs
 from PySide6.QtCore import QObject, QTimer, Signal, Qt
 
 from applog import log
+from artists import options as artist_options, split_artists
+from library_cache import _SCHEMA_VERSION as _DB_VERSION
 from player import Player, PlayMode, extract_art
 
 _CFG_DIR   = Path.home() / ".config" / "audiocrate"
@@ -53,7 +52,7 @@ _WAVE_DIR  = Path.home() / ".cache" / "audiocrate" / "webwaveform"
 WAVE_POINTS = 240              # bars in the phone's waveform seek bar
 
 DEFAULT_PORT = 8770
-TOKEN_TTL    = 90 * 24 * 3600      # "remember me" — 90 days
+TOKEN_TTL    = 90 * 24 * 3600      # "remember me", 90 days
 PBKDF2_ITERS = 200_000
 SNAPSHOT_MS  = 400                 # GUI-thread state refresh
 MAX_FAILS    = 5                   # per IP before lockout
@@ -128,7 +127,7 @@ def set_pin(pin: str):
     """Change the PIN and invalidate every existing session."""
     cfg = load_config()
     cfg["salt"]     = _b64e(secrets.token_bytes(16))
-    cfg["secret"]   = _b64e(secrets.token_bytes(32))   # rotate → logs out all devices
+    cfg["secret"]   = _b64e(secrets.token_bytes(32))   # a new secret logs out every device
     cfg["pin_hash"] = _hash_pin(pin, _b64d(cfg["salt"]))
     save_config(cfg)
 
@@ -161,7 +160,7 @@ def check_token(token: str, secret: bytes) -> bool:
 class WebRemote(QObject):
     """Owns the HTTP server, the state snapshot and the command queue."""
 
-    command = Signal(str, object)          # (action, value) — queued to GUI thread
+    command = Signal(str, object)          # (action, value), queued onto the GUI thread
 
     def __init__(self, player: Player, window=None, parent: QObject | None = None):
         super().__init__(parent)
@@ -176,6 +175,7 @@ class WebRemote(QObject):
         self._queue_dirty = True
         self._fails: dict[str, list] = {}   # ip -> [count, locked_until]
         self._tls   = threading.local()
+        self._people_key, self._people_rows, self._people_at = None, {}, 0.0
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._err   = ""            # set before the first _refresh() below
@@ -192,8 +192,8 @@ class WebRemote(QObject):
         try:
             player.error.connect(self._on_error)
             # Rebuilding the queue view walks the play order (and may rebuild the
-            # shuffle list), so it only ever happens on the GUI thread — flagged
-            # here, done in _refresh.
+            # shuffle list), so it only happens on the GUI thread: flagged here,
+            # done in _refresh.
             player.queue_changed.connect(self._mark_queue_dirty)
             player.order_changed.connect(self._mark_queue_dirty)
             player.track_changed.connect(lambda _t: self._mark_queue_dirty())
@@ -208,7 +208,7 @@ class WebRemote(QObject):
         try:
             httpd = ThreadingHTTPServer((bind, port), _Handler)
         except OSError as e:
-            log.error("web remote could not bind %s:%d — %s", bind, port, e)
+            log.error("web remote could not bind %s:%d: %s", bind, port, e)
             return False
         httpd.daemon_threads = True
         httpd.remote = self                                    # handler reaches us here
@@ -252,6 +252,7 @@ class WebRemote(QObject):
                 "has_track": t is not None,
                 "title":     (t.title or t.path.stem) if t else "",
                 "artist":    (t.artist or "") if t else "",
+                "artists":   list(t.artists) if t else [],
                 "album":     (t.album or "") if t else "",
                 "path":      str(t.path) if t else "",
                 "ext":       (t.path.suffix.lower().lstrip(".") if t else ""),
@@ -286,7 +287,7 @@ class WebRemote(QObject):
                 self._queue_snap = qsnap
 
     def _build_queue(self, limit: int = 500) -> dict:
-        """Queue contents + play order. GUI thread only — `upcoming()` can
+        """Queue contents and play order. GUI thread only, `upcoming()` can
         rebuild the shuffle list as a side effect."""
         p = self._player
         try:
@@ -301,6 +302,7 @@ class WebRemote(QObject):
             "path":   str(t.path),
             "title":  t.title or t.path.stem,
             "artist": t.artist or "",
+            "artists": list(t.artists),
             "album":  t.album or "",
             "art":    _art_key(t.path),
             "ext":    t.path.suffix.lower().lstrip("."),
@@ -365,9 +367,8 @@ class WebRemote(QObject):
             self._player.add_many(paths)
         if play:
             # The queue is unique by path, so these tracks may already be in it
-            # and nothing was appended. Find where the first one actually sits
-            # rather than assuming it landed at the old queue length — that
-            # index is out of range whenever everything was already queued.
+            # and nothing was appended. Find where the first one actually sits:
+            # the old queue length is out of range when everything was already queued.
             target = paths[0]
             for i, t in enumerate(self._player.queue):
                 if t.path == target:
@@ -418,8 +419,16 @@ class WebRemote(QObject):
             conn = sqlite3.connect(f"file:{_DB_PATH}?mode=ro", uri=True,
                                    check_same_thread=False)
             conn.row_factory = sqlite3.Row
+            if conn.execute("PRAGMA user_version").fetchone()[0] != _DB_VERSION:
+                conn.close()                  # an older cache, which the app has yet to rebuild
+                return None
             self._tls.conn = conn
         return conn
+
+    @staticmethod
+    def _names(r) -> list[str]:
+        """The artists of a library row, split the way the app splits them."""
+        return split_artists(r["artists"].split("\n") if r["artists"] else [r["artist"] or ""], r["albumartist"] or "")
 
     def library(self, q: str = "", limit: int = 200, offset: int = 0,
                 album: str = "", artist: str = "") -> dict:
@@ -433,38 +442,60 @@ class WebRemote(QObject):
         if album:
             where.append("album = ?"); args.append(album)
         if artist:
-            where.append("artist = ?"); args.append(artist)
+            where.append("(artists LIKE ? OR artist LIKE ?)"); args += [f"%{artist}%"] * 2
         sql_where = (" WHERE " + " AND ".join(where)) if where else ""
-        total = conn.execute(f"SELECT COUNT(*) FROM tracks{sql_where}", args).fetchone()[0]
-        rows = conn.execute(
-            f"SELECT path, title, artist, album, duration FROM tracks{sql_where}"
-            f" ORDER BY artist='' , artist, album, title LIMIT ? OFFSET ?",
-            args + [limit, offset]).fetchall()
+        cols = "path, title, artist, album, duration, artists, albumartist"
+        order = " ORDER BY artist='' , artist, album, title"
+        if artist:       # the match above is only a first cut: the name has to be one of the track's artists
+            found = [r for r in conn.execute(f"SELECT {cols} FROM tracks{sql_where}{order}", args)
+                     if artist.casefold() in {n.casefold() for n in self._names(r)}]
+            total, rows = len(found), found[offset:offset + limit]
+        else:
+            total = conn.execute(f"SELECT COUNT(*) FROM tracks{sql_where}", args).fetchone()[0]
+            rows = conn.execute(f"SELECT {cols} FROM tracks{sql_where}{order} LIMIT ? OFFSET ?",
+                                args + [limit, offset]).fetchall()
         return {"total": total, "items": [{
             "path":   r["path"],
             "title":  r["title"] or Path(r["path"]).stem,
             "artist": r["artist"] or "",
+            "artists": self._names(r),
             "album":  r["album"] or "",
             "dur":    int((r["duration"] or 0) * 1000),
             "art":    _art_key(Path(r["path"])),
         } for r in rows]}
+
+    def _people(self, conn) -> dict:
+        """Every artist name with its track count and one track, over the whole library."""
+        key = artist_options()
+        if self._people_key != key or time.monotonic() - self._people_at > 30:     # the list may be a little old
+            out: dict = {}
+            for r in conn.execute("SELECT path, artist, artists, albumartist FROM tracks WHERE artist != ''"):
+                for name in self._names(r):
+                    e = out.setdefault(name.casefold(), [name, 0, r["path"]])
+                    e[1] += 1
+            self._people_key, self._people_rows, self._people_at = key, out, time.monotonic()
+        return self._people_rows
 
     def groups(self, kind: str, q: str = "") -> dict:
         """Album or artist list for the Library screen's drill-down."""
         conn = self._db()
         if conn is None:
             return {"items": []}
-        col = "album" if kind == "albums" else "artist"
+        if kind != "albums":
+            rows = sorted((e for e in self._people(conn).values() if q.casefold() in e[0].casefold()),
+                          key=lambda e: e[0].casefold())[:500]
+            return {"items": [{"name": n, "count": c, "artist": n, "path": p, "art": _art_key(Path(p))}
+                              for n, c, p in rows]}
         args: list = []
-        filt = f"WHERE {col} != ''"
+        filt = "WHERE album != ''"
         if q:
-            filt += f" AND {col} LIKE ?"
+            filt += " AND album LIKE ?"
             args.append(f"%{q}%")
         rows = conn.execute(
-            f"SELECT {col} AS name, COUNT(*) AS n, MIN(artist) AS artist,"
-            f" MIN(path) AS sample FROM tracks {filt} GROUP BY {col}"
+            f"SELECT album AS name, COUNT(*) AS n, MIN(artist) AS artist,"
+            f" MIN(path) AS sample FROM tracks {filt} GROUP BY album"
             f" ORDER BY name LIMIT 500", args).fetchall()
-        # `sample` is one member track — its cover stands in for the group.
+        # `sample` is one member track, its cover stands in for the group
         return {"items": [{
             "name":   r["name"],
             "count":  r["n"],
@@ -474,15 +505,13 @@ class WebRemote(QObject):
         } for r in rows]}
 
     def _sessions(self) -> list[dict]:
-        """The desktop's saved playlist tabs — a list of {name, paths}, exactly
-        as PlaylistPanel.save_session() writes it."""
+        """The desktop's saved playlist tabs: a list of {name, paths}, as
+        PlaylistPanel.save_session() writes it."""
         try:
             data = json.loads((_CFG_DIR / "playlists.json").read_text(encoding="utf-8"))
         except Exception:
             return []
-        if not isinstance(data, list):
-            return []
-        return [d for d in data if isinstance(d, dict) and isinstance(d.get("paths"), list)]
+        return _session_tabs(data)
 
     def playlists(self) -> dict:
         return {"items": [{"name": str(d.get("name") or "Playlist"),
@@ -517,6 +546,7 @@ class WebRemote(QObject):
                 "path":    str(p),
                 "title":   (t.get("title") or p.stem),
                 "artist":  t.get("artist") or "",
+                "artists": t.get("artists") or [],
                 "album":   t.get("album") or "",
                 "dur":     int((t.get("duration") or 0) * 1000),
                 "art":     _art_key(p) if exists else "",
@@ -559,7 +589,7 @@ class WebRemote(QObject):
             _WAVE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = cache.with_suffix(".tmp")
             tmp.write_text(json.dumps(peaks))
-            tmp.replace(cache)              # same dir → atomic, unlike /tmp
+            tmp.replace(cache)              # same directory, so the rename is atomic
         except Exception:
             log.exception("could not cache waveform to %s", cache)
         return peaks
@@ -574,6 +604,18 @@ class WebRemote(QObject):
         except Exception:
             pass
         return {"accent": accent, "bg": bg}
+
+
+def _session_tabs(data) -> list[dict]:
+    """Normalise the desktop's playlist session file, which is either a bare list
+    of {name, paths} or {"tabs": [...], "columns": "..."}. Both are accepted, since
+    the remote may run against either version of the desktop.
+    """
+    if isinstance(data, dict):
+        data = data.get("tabs", [])
+    if not isinstance(data, list):
+        return []
+    return [d for d in data if isinstance(d, dict) and isinstance(d.get("paths"), list)]
 
 
 MODE_LABEL = {
@@ -637,7 +679,7 @@ def _sniff_mime(data: bytes) -> str:
 
 
 def _art_key(path: Path) -> str:
-    """Stable per-(file, mtime) id — lets the phone cache art forever."""
+    """Stable per-(file, mtime) id, so the phone can cache art forever."""
     try:
         mt = path.stat().st_mtime_ns
     except OSError:
@@ -652,7 +694,7 @@ class _Handler(BaseHTTPRequestHandler):
     sys_version    = ""
     protocol_version = "HTTP/1.1"
 
-    # -- plumbing ----------------------------------------------------------
+    # plumbing
 
     def log_message(self, fmt, *args):
         log.debug("web %s - %s", self.address_string(), fmt % args)
@@ -705,7 +747,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    # -- routing -----------------------------------------------------------
+    # routing
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -766,7 +808,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         return self._json({"error": "not_found"}, 404)
 
-    # -- API ---------------------------------------------------------------
+    # API
 
     def _api_get(self, path: str, qs: dict):
         arg = lambda k, d="": (qs.get(k, [d])[0])
@@ -805,8 +847,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"error": "no_track"}, 404)
         peaks = self.remote.waveform(p, key)
         if peaks is None:
-            # Chiptunes and anything ffmpeg can't decode — the phone falls back
-            # to the plain seek bar rather than showing an empty waveform.
+            # chiptunes and anything ffmpeg can't decode: the phone falls back to
+            # the plain seek bar instead of an empty waveform
             return self._json({"error": "unavailable"}, 404)
         self._send(200, json.dumps({"peaks": peaks}).encode(), "application/json",
                    cache="public, max-age=31536000, immutable" if key else "no-store")
@@ -827,7 +869,7 @@ class _Handler(BaseHTTPRequestHandler):
             size = int(size_str or 0)
         except ValueError:
             size = 0
-        if size in _ALLOWED_SIZES:                  # fixed set → bounded cache
+        if size in _ALLOWED_SIZES:                  # a fixed set of sizes keeps the cache bounded
             data, ctype = _thumbnail(data, size, key)
         else:
             ctype = _sniff_mime(data)
@@ -835,7 +877,7 @@ class _Handler(BaseHTTPRequestHandler):
         cache = "public, max-age=31536000, immutable" if key else "no-store"
         self._send(200, data, ctype, cache=cache)
 
-    # -- static ------------------------------------------------------------
+    # static files
 
     def _static(self, path: str):
         index = _WEBUI_DIR / "index.html"

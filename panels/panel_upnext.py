@@ -1,23 +1,20 @@
 from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QLabel, QPushButton,
+    QLabel, QPushButton, QSizePolicy,
 )
 from player import Player
+from steady_label import SteadyLabel
 
 
 class UpNextWidget(QWidget):
-    """Dedicated, dockable view of the upcoming play order.
-
-    Mirrors the Playlist panel's inline queue but lives in its own dock so it
-    can be floated into a separate window, resized freely, and toggled via the
-    View menu. Double-click (or Enter) jumps straight to a track.
-    """
+    """The upcoming play order in its own dock. Double click or Enter plays that track."""
 
     def __init__(self, player: Player, parent=None):
         super().__init__(parent)
         self._player = player
         self._indices: list[int] = []
+        self._source = ""            # the playlist playback comes from
         self._dirty = False
         self._build()
 
@@ -35,8 +32,8 @@ class UpNextWidget(QWidget):
         hdr.setContentsMargins(0, 0, 0, 0)
         self._heading = QLabel("Up Next")
         self._heading.setObjectName("track_sub")
-        hdr.addWidget(self._heading)
-        hdr.addStretch()
+        self._heading.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # the count and the playlist name must not set the width
+        hdr.addWidget(self._heading, 1)
         self._clear_btn = QPushButton("Clear queue")
         self._clear_btn.setFlat(True)
         self._clear_btn.setToolTip("Remove every track from the queue")
@@ -44,9 +41,8 @@ class UpNextWidget(QWidget):
         hdr.addWidget(self._clear_btn)
         root.addLayout(hdr)
 
-        self._now = QLabel("")
+        self._now = SteadyLabel()
         self._now.setObjectName("track_title")
-        self._now.setWordWrap(True)
         root.addWidget(self._now)
 
         self._list = QListWidget()
@@ -56,9 +52,13 @@ class UpNextWidget(QWidget):
         self._list.itemDoubleClicked.connect(self._jump)
         root.addWidget(self._list, 1)
 
+    def set_source(self, name: str):
+        self._source = name
+        self._refresh()
+
     def _refresh(self, *_):
         if not self.isVisible():
-            self._dirty = True      # dock hidden — rebuild on next show instead
+            self._dirty = True      # hidden: rebuild on the next show instead
             return
         self._dirty = False
         self._list.clear()
@@ -79,10 +79,11 @@ class UpNextWidget(QWidget):
             self._indices.append(idx)
 
         cnt = len(self._indices)
+        head = f"Up Next from {self._source}" if self._source else "Up Next"
         if cnt:
-            self._heading.setText(f"Up Next · {cnt} track{'s' if cnt != 1 else ''}")
+            self._heading.setText(f"{head}: {cnt} track{'s' if cnt != 1 else ''}")
         else:
-            self._heading.setText("Up Next · end of queue")
+            self._heading.setText(f"{head}: end of queue")
 
     def showEvent(self, e):
         super().showEvent(e)

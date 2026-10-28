@@ -1,8 +1,7 @@
-"""Online lyrics lookup via LRCLIB (https://lrclib.net) — free, no API key.
+"""Lyrics lookup on LRCLIB (https://lrclib.net), which needs no API key.
 
-Returns LRC text (time-synced when available, plain otherwise). Results are
-cached on disk so a track is only fetched once, and every call is network-safe
-to run off the main thread (the lyrics panel already loads in a worker thread).
+Returns LRC text, time-synced when available and plain otherwise. Results are
+cached on disk. The calls block on the network, so run them off the GUI thread.
 """
 from __future__ import annotations
 
@@ -35,10 +34,34 @@ def _best(rec: dict) -> str:
     return (rec.get("syncedLyrics") or rec.get("plainLyrics") or "").strip()
 
 
-def fetch(artist: str, title: str, album: str = "", duration: int = 0) -> tuple[str, str | None]:
+def _lookup(artist: str, title: str, album: str, duration: int) -> str:
+    # exact lookup first, it is the one that can match on duration
+    q = {"track_name": title, "artist_name": artist}
+    if album:
+        q["album_name"] = album
+    if duration:
+        q["duration"] = int(duration)
+    try:
+        lrc = _best(_get(f"{_API}/api/get?" + urllib.parse.urlencode(q)))
+    except Exception:
+        lrc = ""
+    # otherwise search and take the first synced hit
+    if not lrc:
+        sq = urllib.parse.urlencode({"track_name": title, "artist_name": artist})
+        results = _get(f"{_API}/api/search?" + sq)
+        if isinstance(results, list):
+            synced = next((r for r in results if r.get("syncedLyrics")), None)
+            lrc = _best(synced or (results[0] if results else {}))
+    return lrc
+
+
+def fetch(artist: str, title: str, album: str = "", duration: int = 0, also=()) -> tuple[str, str | None]:
     """(LRC text, error) for a track. Text is "" when nothing was found; error is
-    None on a definitive answer and "network" when LRCLIB couldn't be reached —
-    so the UI can tell "no lyrics exist" from "you're offline". Cached on disk."""
+    None on a definitive answer and "network" when LRCLIB could not be reached,
+    so the UI can tell "no lyrics exist" from "offline". Cached on disk.
+
+    artist is the name as the file's tag has it, which also keys the cache. If it finds
+    nothing, each of `also` (other ways to name the artists) is tried."""
     if not title:
         return "", None
     key = _cache_key(artist, title, album, int(duration or 0))
@@ -50,25 +73,12 @@ def fetch(artist: str, title: str, album: str = "", duration: int = 0) -> tuple[
 
     lrc = ""
     try:
-        # Precise lookup first (best chance of a duration-matched synced result).
-        q = {"track_name": title, "artist_name": artist}
-        if album:
-            q["album_name"] = album
-        if duration:
-            q["duration"] = int(duration)
-        try:
-            lrc = _best(_get(f"{_API}/api/get?" + urllib.parse.urlencode(q)))
-        except Exception:
-            lrc = ""
-        # Fall back to a fuzzy search and take the first synced hit.
-        if not lrc:
-            sq = urllib.parse.urlencode({"track_name": title, "artist_name": artist})
-            results = _get(f"{_API}/api/search?" + sq)
-            if isinstance(results, list):
-                synced = next((r for r in results if r.get("syncedLyrics")), None)
-                lrc = _best(synced or (results[0] if results else {}))
+        for who in dict.fromkeys([artist, *filter(None, also)]):
+            lrc = _lookup(who, title, album, duration)
+            if lrc:
+                break
     except Exception:
-        # DNS failure, timeout, HTTP 5xx… — not the same as "no lyrics exist"
+        # DNS failure, timeout or HTTP 5xx: not the same as "no lyrics exist"
         return "", "network"
 
     if lrc:

@@ -1,17 +1,13 @@
-"""Shared support for native chiptune rendering: a process-wide lock, and a
-size cap for the on-disk render caches.
+"""Shared support for native chiptune rendering: one process-wide lock, and a size cap for the
+on-disk render caches.
 
-One process-wide lock for native chiptune emulation.
+libfurnace and libsidplayfp are both C/C++ emulator cores with process-global state (Furnace
+keeps a singleton DivEngine; both carry static tables and logging state). Rendering two tunes at
+once corrupts the heap and aborts with "free(): invalid pointer", and it happens as soon as a
+background prefetch overlaps the render the user is waiting for.
 
-libfurnace and libsidplayfp are both C/C++ emulator cores with process-global
-state (Furnace keeps a singleton DivEngine; both carry static tables and logging
-state). Rendering two tunes at once — which happens as soon as a background
-prefetch overlaps the render the user is actually waiting for — corrupts the
-heap and aborts with "free(): invalid pointer".
-
-Serialising every native render costs nothing in practice: rendering runs at
-40-60x realtime, so the queue never backs up, and the foreground render is what
-the user is waiting on anyway.
+Serialising every native render costs nothing in practice: rendering runs at 40-60x realtime, so the queue
+never backs up, and the foreground render is what the user is waiting on anyway.
 """
 from __future__ import annotations
 
@@ -20,9 +16,8 @@ from pathlib import Path
 
 RENDER_LOCK = threading.RLock()
 
-# Rendered chiptunes are full uncompressed WAVs — a 20-subsong SID alone came to
-# 42 MB in testing, and nothing ever deleted them. Cap the caches and drop the
-# least recently used first.
+# Rendered chiptunes are uncompressed WAVs (a 20-subsong SID alone came to 42 MB in
+# testing), so the caches are capped and the least recently used files go first.
 CACHE_MAX_MB = 512
 
 

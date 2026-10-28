@@ -21,7 +21,7 @@ export function TrackRow({ path, artKey, title, artist, album, dur, active, miss
   children?: React.ReactNode
 }) {
   const e = ext(path)
-  const sub = [artist, album].filter(Boolean).join(' — ')
+  const sub = [artist, album].filter(Boolean).join(' - ')
 
   return (
     <IonItem

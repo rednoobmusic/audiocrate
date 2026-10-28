@@ -1,13 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Trimmed SINGLE-FILE test build:
+# Trimmed single-file test build:
 #   /tmp/acbuild/bin/pyinstaller --noconfirm audiocrate-onefile.spec
-# Produces dist/audiocrate (one self-contained executable).
+# Produces dist/audiocrate, one self-contained executable.
 #
-# Size strategy:
-#   - no blanket collect_dynamic_libs/collect_data_files('PySide6') (that pulled
-#     in all ~640 MB); rely on PyInstaller's PySide6 hook + the excludes below
-#   - exclude heavy unused Qt modules (WebEngine, QML/Quick, Charts, 3D, …)
-#   - strip symbols + UPX-compress (Qt/python core libs excluded from UPX)
+# What keeps it small:
+#   - no collect_dynamic_libs/collect_data_files('PySide6'), which pulled in all
+#     ~640 MB; PyInstaller's PySide6 hook and the excludes below do the job
+#   - the heavy Qt modules the app does not use are excluded (WebEngine,
+#     QML/Quick, Charts, 3D, ...)
+#   - symbols are stripped and the binaries are UPX-compressed, except the Qt and
+#     Python core libs
 block_cipher = None
 
 _QT_EXCLUDES = [
@@ -39,10 +41,15 @@ a = Analysis(
     datas=[
         ('JetBrainsMono', 'JetBrainsMono'),
         ('icon.png', '.'),
+        ('ui/tour', 'tour'),    # the tour dialog looks for it beside itself
     ],
     hiddenimports=[
         '_bootstrap', 'audio_identity',
         'vgm_player', 'fur_player', 'dsp_engine', 'dsp_chain', 'panel_eq',
+        'dsp_base', 'dsp_user_chain', 'dsp_presets', 'dsp_offline', 'dsp_fx_dynamics',
+        'dsp_fx_space', 'dsp_fx_filters', 'dsp_fx_loudness', 'dsp_fx_modulation',
+        'video_audio', 'panel_dsp', 'converter', 'audio_files', 'convert_dialog',
+        'diag', 'diag_cli', 'diag_report', 'diagnostics_dialog',
         'discord_rpc', 'pypresence', 'scipy', 'scipy.signal', 'ffmpeg_util',
         'library_cache', 'lyrics_fetch', 'sleep_timer', 'applog',
         'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets', 'PySide6.QtDBus',
@@ -57,8 +64,8 @@ a = Analysis(
     excludes=[
         'tkinter', 'matplotlib', 'pandas', 'PyQt5', 'PyQt6', 'PySide2',
         'IPython', 'pytest',
-        # NB: don't exclude scipy submodules — scipy.signal pulls in scipy.fft,
-        # scipy.special, scipy.linalg etc. at import time.
+        # scipy submodules stay: scipy.signal imports scipy.fft, scipy.special,
+        # scipy.linalg and others when it loads
     ] + _QT_EXCLUDES,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -66,10 +73,10 @@ a = Analysis(
     noarchive=False,
 )
 
-# Drop the FFmpeg media stack (QtMultimedia's QMediaPlayer video/decode backend).
-# Audio playback uses QAudioSink fed raw PCM by the system ffmpeg binary, and
-# chiptunes use their own libs — none of which need these (~40 MB saved).
-# Video files won't play in this trimmed build (intentional).
+# Drop the FFmpeg media stack (the video and decode backend of QtMultimedia's
+# QMediaPlayer). Audio playback feeds raw PCM from the system ffmpeg binary to a
+# QAudioSink and chiptunes use their own libs, so neither needs these (~40 MB
+# saved). Video files do not play in this trimmed build, on purpose.
 _VIDEO_DROP = (
     'libavcodec', 'libavformat', 'libavutil', 'libavfilter', 'libavdevice',
     'libswscale', 'libswresample', 'libpostproc', 'ffmpegmediaplugin',
@@ -83,7 +90,7 @@ _EXTRA_DROP = (
 )
 a.binaries = [b for b in a.binaries
               if not any(k in b[0].lower() for k in _VIDEO_DROP + _EXTRA_DROP)]
-# Drop Qt translations (.qm) — the UI is English-only.
+# Drop Qt translations (.qm); the UI is English only.
 a.datas = [d for d in a.datas
            if 'translations' not in d[0].lower() and not d[0].lower().endswith('.qm')]
 

@@ -10,6 +10,8 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
+import anim
+
 try:
     from shiboken6 import isValid as _qt_valid
 except ImportError:
@@ -43,9 +45,10 @@ def _engine_stalled(frac: float, last: float, strikes: int,
     return frac < 0.999 and frac <= last + _FRAC_EPS and strikes >= limit
 
 
-def _compute_waveform(path: Path, n: int) -> np.ndarray:
+def _compute_waveform(path: Path, n: int, alive=None) -> np.ndarray | None:
+    """`alive`, if given, is asked every 50 ms and ffmpeg is stopped, and None returned, once it says no."""
     from ffmpeg_util import ffmpeg_path
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         [
             ffmpeg_path(),
             "-i",
@@ -62,7 +65,21 @@ def _compute_waveform(path: Path, n: int) -> np.ndarray:
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    data = np.frombuffer(proc.stdout, dtype=np.float32)
+    done = threading.Event()
+    if alive is not None:
+        def watch():
+            while not done.wait(0.05):
+                if not alive():
+                    proc.kill()
+                    return
+        threading.Thread(target=watch, daemon=True).start()
+    try:
+        raw = proc.communicate()[0]
+    finally:
+        done.set()
+    if alive is not None and not alive():
+        return None
+    data = np.frombuffer(raw, dtype=np.float32)
     if len(data) == 0:
         return np.zeros(n, dtype=np.float32)
 
@@ -78,17 +95,17 @@ def _compute_waveform(path: Path, n: int) -> np.ndarray:
     return rms
 
 
-def _compute_waveform_gme(path: Path, n: int, track_idx: int = 0) -> np.ndarray:
-    """Full waveform for a libgme chiptune (ffmpeg can't decode these) — render the
-    whole tune to its play-length and bin to n RMS points. `track_idx` selects the
-    subsong for multi-tune formats (NSF/SAP/GBS/KSS/AY…)."""
+def _compute_waveform_gme(path: Path, n: int, track_idx: int = 0, alive=None) -> np.ndarray | None:
+    """Full waveform for a libgme chiptune (ffmpeg can't decode these): render the
+    whole tune to its play length and bin it to n RMS points. `track_idx` selects the
+    subsong for multi-tune formats (NSF/SAP/GBS/KSS/AY)."""
     import ctypes
     from vgm_player import _lib as gme, _GmeInfo
     emu = ctypes.c_void_p()
     if gme.gme_open_file(str(path).encode(), ctypes.byref(emu), _RATE):
         return np.zeros(n, dtype=np.float32)
     try:
-        # length of THIS subsong (not just track 0)
+        # length of this subsong, not of track 0
         dur_ms = 150_000
         info_ptr = ctypes.POINTER(_GmeInfo)()
         if not gme.gme_track_info(emu, ctypes.byref(info_ptr), track_idx) and info_ptr:
@@ -104,6 +121,8 @@ def _compute_waveform_gme(path: Path, n: int, track_idx: int = 0) -> np.ndarray:
         target_frames = int(dur_ms / 1000 * _RATE)
         parts, got = [], 0
         while got < target_frames and not gme.gme_track_ended(emu):
+            if alive is not None and not alive():
+                return None
             if gme.gme_play(emu, chunk, buf):
                 break
             parts.append(np.frombuffer(bytes(buf), dtype=np.int16))
@@ -129,10 +148,11 @@ def _compute_waveform_gme(path: Path, n: int, track_idx: int = 0) -> np.ndarray:
 
 class WaveformBar(QWidget):
     seeked = Signal(float)
-    _loaded = Signal(object)
+    _loaded = Signal(object, int)   # (shape, the load it was asked for)
     def __init__(self, parent=None):
         super().__init__(parent)
         self._no_ffmpeg = False
+        self._gen = 0                 # one per load: a result for an older one is dropped, its ffmpeg stopped
         self._waveform: np.ndarray | None = None
         self._px_wave: np.ndarray | None = None
         self._px_width = 0
@@ -146,8 +166,8 @@ class WaveformBar(QWidget):
         self._fur_rms: np.ndarray | None = None
         self._fur_peak = 1e-6
         self._fur_filled = 0
-        # Cached pre-rendered bar images (played/unplayed colour) — position
-        # updates then only blit, instead of rebuilding an H×W×4 buffer per frame.
+        # Cached pre-rendered bar images (played/unplayed colour): position
+        # updates then only blit, instead of rebuilding an HxWx4 buffer per frame.
         self._img_base: QImage | None = None
         self._img_played: QImage | None = None
         self._img_key = None
@@ -168,32 +188,51 @@ class WaveformBar(QWidget):
         self._engine_poll.setInterval(120)
         self._engine_poll.timeout.connect(self._poll_engine)
         self._loaded.connect(self._on_loaded)
+        self._glide = anim.Glide(self, self._place)
         self.setMinimumHeight(44)
         self.setCursor(Qt.PointingHandCursor)
         self.setContentsMargins(0, 0, 0, 0)
+
+    def _begin(self) -> int:
+        """A new request replaces the last one: stop polling the engine and
+        return the number that its own results must carry."""
+        self._gen += 1
+        self._engine_poll.stop()
+        self._engine = None
+        return self._gen
+
+    def clear(self):
+        """Show nothing, and drop what is still loading. For a track whose
+        shape comes later (a render), so the one before it does not stay up."""
+        self._begin()
+        self._fur_mode = False
+        self._waveform = None
+        self._px_wave = None
+        self.update()
 
     def load(self, path: Path, engine=None, key: str | None = None):
         """Show the waveform for `path`.
 
         If `engine` is given, the shape is read from the playback engine's own
-        decode buffer — the audio is being decoded to play it anyway, so there
+        decode buffer: the audio is being decoded to play it anyway, so there
         is no reason to run a second ffmpeg pass over the same file. The bar
         fills in as the decode runs ahead of the play head, then settles. Falls
         back to decoding the file directly when there is no engine buffer (video
         via QMediaPlayer, or a track that isn't loaded yet).
         """
+        gen = self._begin()
         self._fur_mode = False
         self._waveform = None
         self._px_wave = None
         self.update()
-        # `key` distinguishes shapes that share a path — a multi-subsong SID or
+        # `key` distinguishes shapes that share a path: a multi-subsong SID or
         # chiptune has one file but a different waveform per subsong, and keying
-        # on the path alone made every subsong show subsong 1's shape.
+        # on the path alone would show subsong 1's shape for all of them.
         key = key or str(path)
         with _lock:
             if key in _cache:
                 _cache.move_to_end(key)
-                self._loaded.emit(_cache[key])
+                self._loaded.emit(_cache[key], gen)
                 return
         if engine is not None:
             self._engine = engine
@@ -205,7 +244,7 @@ class WaveformBar(QWidget):
             self._engine_poll.start()
             self._poll_engine()            # draw whatever is already decoded
             return
-        threading.Thread(target=self._bg_load, args=(path, key), daemon=True).start()
+        threading.Thread(target=self._bg_load, args=(path, key, gen), daemon=True).start()
 
     def _poll_engine(self) -> bool:
         """Pull the current envelope from the engine. True once it's complete."""
@@ -217,15 +256,22 @@ class WaveformBar(QWidget):
             pts, frac = eng.envelope(_N_POINTS)
         except Exception:
             pts, frac = None, 0.0
+        if pts is None and frac < 0:
+            self._engine_poll.stop()        # the engine was stopped: it has given the song back, keep the shape drawn so far
+            self._engine = None
+            return False
+        src = getattr(eng, "source", None)
+        if src is not None and src != str(self._engine_path):
+            pts = None         # its buffer holds another track's audio, ours is not loaded yet
         if pts is None:
             # Nothing decoded yet. Give the engine a moment, then decode the file
-            # ourselves — this track may not be going through the engine at all.
+            # ourselves, since this track may not be going through the engine at all.
             self._engine_tries += 1
             if self._engine_tries > 12:     # ~1.5s
                 self._engine_poll.stop()
                 self._engine = None
                 p, k = self._engine_path, self._engine_key
-                threading.Thread(target=self._bg_load, args=(p, k), daemon=True).start()
+                threading.Thread(target=self._bg_load, args=(p, k, self._gen), daemon=True).start()
             return False
         self._waveform = pts
         self._px_wave = None
@@ -241,7 +287,7 @@ class WaveformBar(QWidget):
             self._engine_poll.stop()
             self._engine = None
             p, k = self._engine_path, self._engine_key
-            threading.Thread(target=self._bg_load, args=(p, k), daemon=True).start()
+            threading.Thread(target=self._bg_load, args=(p, k, self._gen), daemon=True).start()
             return False
         if frac >= 0.999:
             self._engine_poll.stop()
@@ -280,14 +326,24 @@ class WaveformBar(QWidget):
         return QColor(self._default_accent)
 
     def set_position(self, frac: float):
+        self._glide.stop()
+        self._place(frac)
+
+    def glide_to(self, frac: float):
+        """The play head for a position that arrives in steps: it moves smoothly when a step is
+        wide enough to see."""
+        self._glide.to(max(0.0, min(1.0, frac)), self.width())
+
+    def _place(self, frac: float):
         self._position = max(0.0, min(1.0, frac))
+        self._glide.place(self._position)
         self.update()
 
     # .fur progressive waveform (streamed from FurPlayer output)
 
     def fur_begin(self):
         """Start a fresh progressive waveform for a .fur track."""
-        self._engine_poll.stop(); self._engine = None
+        self._begin()
         self._no_ffmpeg = False
         self._fur_mode = True
         self._fur_rms = np.zeros(_N_POINTS, dtype=np.float32)
@@ -321,31 +377,33 @@ class WaveformBar(QWidget):
         self._px_wave = None
         self.update()
 
-    def _bg_load(self, path: Path, key: str):
+    def _bg_load(self, path: Path, key: str, gen: int):
         from ffmpeg_util import ffmpeg_available
         if not ffmpeg_available():
             self._no_ffmpeg = True
             if _qt_valid(self):
-                self._loaded.emit(np.zeros(_N_POINTS, dtype=np.float32))
+                self._loaded.emit(np.zeros(_N_POINTS, dtype=np.float32), gen)
             return
         self._no_ffmpeg = False
         try:
-            data = _compute_waveform(path, _N_POINTS)
+            data = _compute_waveform(path, _N_POINTS, lambda: gen == self._gen)
         except Exception:
             data = np.zeros(_N_POINTS, dtype=np.float32)
-        with _lock:
-            _cache[key] = data
-            _cache.move_to_end(key)
-            while len(_cache) > _MAX_CACHE:
-                _cache.popitem(last=False)
+        if data is None:
+            return                         # replaced while it ran
+        if data.any():                     # a file ffmpeg could not read is not worth remembering as flat
+            with _lock:
+                _cache[key] = data
+                _cache.move_to_end(key)
+                while len(_cache) > _MAX_CACHE:
+                    _cache.popitem(last=False)
         if _qt_valid(self):
-            self._loaded.emit(data)
+            self._loaded.emit(data, gen)
 
     def load_gme(self, path: Path, track_idx: int = 0):
         """Full pre-rendered waveform for a libgme chiptune (vgm/nsf/spc/ay/...).
         `track_idx` selects the subsong for multi-tune formats."""
-        self._engine_poll.stop()
-        self._engine = None
+        gen = self._begin()
         self._fur_mode = False
         self._no_ffmpeg = False
         self._waveform = None
@@ -355,24 +413,29 @@ class WaveformBar(QWidget):
         with _lock:
             if key in _cache:
                 _cache.move_to_end(key)
-                self._loaded.emit(_cache[key])
+                self._loaded.emit(_cache[key], gen)
                 return
-        threading.Thread(target=self._bg_load_gme, args=(path, key, track_idx), daemon=True).start()
+        threading.Thread(target=self._bg_load_gme, args=(path, key, track_idx, gen), daemon=True).start()
 
-    def _bg_load_gme(self, path: Path, key: str, track_idx: int = 0):
+    def _bg_load_gme(self, path: Path, key: str, track_idx: int, gen: int):
         try:
-            data = _compute_waveform_gme(path, _N_POINTS, track_idx)
+            data = _compute_waveform_gme(path, _N_POINTS, track_idx, lambda: gen == self._gen)
         except Exception:
             data = np.zeros(_N_POINTS, dtype=np.float32)
-        with _lock:
-            _cache[key] = data
-            _cache.move_to_end(key)
-            while len(_cache) > _MAX_CACHE:
-                _cache.popitem(last=False)
+        if data is None:
+            return                         # replaced while it ran
+        if data.any():
+            with _lock:
+                _cache[key] = data
+                _cache.move_to_end(key)
+                while len(_cache) > _MAX_CACHE:
+                    _cache.popitem(last=False)
         if _qt_valid(self):
-            self._loaded.emit(data)
+            self._loaded.emit(data, gen)
 
-    def _on_loaded(self, data: np.ndarray):
+    def _on_loaded(self, data: np.ndarray, gen: int):
+        if gen != self._gen:
+            return                         # the track changed while this was being worked out
         self._waveform = data
         self._px_wave = None
         self.update()
@@ -387,7 +450,7 @@ class WaveformBar(QWidget):
 
     def _rebuild_images(self, W: int, H: int, bg: QColor, hi_c: QColor, dim_c: QColor):
         """Pre-render the whole bar twice (played/unplayed colours). paintEvent
-        then just blits the two halves — no per-frame numpy allocation."""
+        then just blits the two halves, with no per-frame numpy allocation."""
         mid = H * 0.5
         amps = (self._px_wave * mid * 0.92).astype(np.float32)
         y_top = np.maximum(0, (mid - amps).astype(int))
@@ -427,7 +490,7 @@ class WaveformBar(QWidget):
         if self._no_ffmpeg:
             p.fillRect(rect, bg)
             p.setPen(pal.mid().color())
-            p.drawText(rect, Qt.AlignCenter, "ffmpeg not found — waveform unavailable")
+            p.drawText(rect, Qt.AlignCenter, "ffmpeg not found, waveform unavailable")
             p.end()
             return
 

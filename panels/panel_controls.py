@@ -8,8 +8,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QFontMetrics
 from player import Player, PlayMode, _SID_EXTS
+import anim
 
-# Nerd Font MD codepoints — verified directly from font cmap
+# Nerd Font MD codepoints, checked against the font's cmap
 _IC_PREV    = "\U000f04ae"   # nf-md-skip_previous
 _IC_PLAY    = "\U000f040a"   # nf-md-play
 _IC_PAUSE   = "\U000f03e4"   # nf-md-pause
@@ -19,7 +20,7 @@ _IC_SHUFFLE = "\U000f049d"   # nf-md-shuffle
 _IC_WAVE    = "\U000f147d"   # nf-md-waveform
 _IC_VOL     = "\U000f057e"   # nf-md-volume_high
 _IC_TRIM    = "\U000f0a6b"   # nf-md-scissors_cutting
-_IC_WAND    = "\U000f0068"   # nf-md-auto_fix (Enhance DSP magic wand)
+_IC_WAND    = "\U000f0068"   # nf-md-auto_fix (the Enhance DSP wand)
 
 _MODE_CYCLE  = [PlayMode.SEQUENTIAL, PlayMode.REPEAT_ALL, PlayMode.REPEAT_ONE]
 _MODE_LABELS = {
@@ -31,15 +32,15 @@ from waveform_bar import WaveformBar
 
 
 class _ElidingLabel(QLabel):
-    """A single-line label that truncates with '…' instead of forcing its
-    container (and the whole window) wider when the text is long. The full
-    text is preserved for the tooltip and re-elided on resize."""
+    """A single-line label that elides long text instead of making its container, and the window, wider.
+    The full text stays in the tooltip and is elided again on resize."""
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(parent)
         self._full = text
-        # Ignored width: take whatever the layout offers, never demand more.
+        # Ignored width: take what the layout offers, never ask for more.
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setTextFormat(Qt.PlainText)
         if text:
             self.setText(text)
 
@@ -57,17 +58,23 @@ class _ElidingLabel(QLabel):
 
     def _relayout(self):
         fm = QFontMetrics(self.font())
-        super().setText(fm.elidedText(self._full, Qt.ElideRight, max(0, self.width())))
+        super().setText(fm.elidedText(self._full, Qt.ElideRight, max(0, self.contentsRect().width())))
+
+    def _line(self) -> int:
+        # One line of this label's own font. The height of the text itself follows the font a script
+        # falls back to (CJK, Arabic, emoji), which made the whole panel taller for some songs.
+        self.ensurePolished()
+        return self.fontMetrics().size(0, "Ag").height()
 
     def minimumSizeHint(self) -> QSize:
-        # Height only — width must not pin the window open.
-        return QSize(0, super().minimumSizeHint().height())
+        # height only, the width must not pin the window open
+        return QSize(0, self._line())
 
     def sizeHint(self) -> QSize:
-        return QSize(0, super().sizeHint().height())
+        return QSize(0, self._line())
 
 
-_VOL_EXP = 3.0   # volume taper exponent — gives the slider much more travel at low volumes
+_VOL_EXP = 3.0   # volume taper exponent: gives the slider more travel at low volumes
 
 
 def _slider_to_vol(v: int) -> float:
@@ -105,7 +112,6 @@ class ControlsWidget(QWidget):
         player.track_changed.connect(self._on_track)
         player.state_changed.connect(self._on_state)
         player.position_changed.connect(self._on_position)
-        # Waveform: .fur output is fed live by MainWindow; ffmpeg can't decode it.
         player.track_changed.connect(self._on_track_waveform)
         player.subsong_changed.connect(self._on_subsong_changed)
 
@@ -121,9 +127,10 @@ class ControlsWidget(QWidget):
         root.addWidget(self._title)
         root.addWidget(self._sub)
 
-        # Subsong selector (multi-tune chiptunes: NSF/SAP/GBS/KSS/AY…). Hidden
-        # unless the loaded file actually has more than one subsong.
-        self._subsong_row = QWidget()
+        # Subsong selector for multi-tune chiptunes (NSF, SAP, GBS, KSS, AY). Hidden unless the file
+        # has more than one subsong. It sits over the right end of the title lines, not in the
+        # layout (see _show_subsong_row).
+        self._subsong_row = QWidget(self)
         ss = QHBoxLayout(self._subsong_row)
         ss.setContentsMargins(0, 0, 0, 0)
         ss.setSpacing(6)
@@ -138,10 +145,11 @@ class ControlsWidget(QWidget):
         self._ss_next.setToolTip("Next subsong")
         self._ss_label = QLabel("")
         self._ss_label.setObjectName("track_sub")
-        # Direct picker as well as prev/next — stepping one at a time through a
-        # 20-subsong SID is painful.
+        # a picker as well as prev/next: stepping through a 20-subsong SID one at a time is slow
         self._ss_pick = QComboBox()
         self._ss_pick.setFixedHeight(22)
+        self._ss_pick.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._ss_pick.setMinimumContentsLength(10)      # the subsong titles must not set its width
         self._ss_pick.setToolTip("Jump to a subsong")
         self._ss_pick.activated.connect(self._on_subsong_pick)
         self._ss_prev.clicked.connect(self._on_subsong_prev)
@@ -150,9 +158,7 @@ class ControlsWidget(QWidget):
         ss.addWidget(self._ss_next)
         ss.addWidget(self._ss_pick)
         ss.addWidget(self._ss_label)
-        ss.addStretch(1)
-        self._subsong_row.setVisible(False)
-        root.addWidget(self._subsong_row)
+        self._subsong_row.hide()
 
         seek_row = QHBoxLayout()
         self._time_cur = QLabel("0:00")
@@ -197,13 +203,13 @@ class ControlsWidget(QWidget):
         self._btn_prev = QPushButton(_IC_PREV)
         self._btn_prev.setToolTip("Previous track  [←]")
         self._btn_play = QPushButton(_IC_PLAY)
-        self._btn_play.setToolTip("Play / Pause  [Space]")
+        self._btn_play.setToolTip("Play / pause  [Space]")
         self._btn_stop = QPushButton(_IC_STOP)
         self._btn_stop.setToolTip("Stop  [S]")
         self._btn_next = QPushButton(_IC_NEXT)
         self._btn_next.setToolTip("Next track  [→]")
         self._btn_mode = QPushButton(_MODE_LABELS[self._player.mode])
-        self._btn_mode.setToolTip("Cycle play mode: Sequential → Repeat All → Repeat One")
+        self._btn_mode.setToolTip("Cycle play mode: sequential → repeat all → repeat one")
         self._btn_shf  = QPushButton(_IC_SHUFFLE)
         self._btn_shf.setCheckable(True)
         self._btn_shf.setToolTip("Shuffle")
@@ -247,7 +253,7 @@ class ControlsWidget(QWidget):
             lambda on: setattr(self._player, "trim_silence", on)
         )
 
-        # Enhance DSP — the "magic wand": airs + brightens the sound.
+        # Enhance DSP (the wand)
         self._wand = QPushButton(_IC_WAND)
         self._wand.setCheckable(True)
         self._wand.setFixedSize(40, 30)
@@ -280,21 +286,16 @@ class ControlsWidget(QWidget):
         self._wf_btn.setChecked(on)
 
     # Enhance DSP wand state (persisted across sessions)
-    @property
-    def enhance_on(self) -> bool:
-        return self._wand.isChecked()
-
     def set_enhance_on(self, on: bool):
         if self._wand.isEnabled():
             self._wand.setChecked(on)
 
     def _on_track_waveform(self, track):
-        # .fur, libgme chiptunes, and CLI-rendered formats (zxtune/openmpt) get their
-        # waveform from MainWindow (live/pre-rendered/rendered-WAV); everything else is
-        # ffmpeg-decoded here.
+        # libgme chiptunes and the CLI-rendered formats (zxtune, openmpt) get their waveform from
+        # MainWindow. Everything else is read here. .fur is rendered to a WAV first and plays
+        # through the DSP engine, so it takes the engine path too.
         import cli_render
         ext = track.path.suffix.lower()
-        # .fur streams through the DSP engine → engine-buffer waveform.
         _skip = {".vgm", ".vgz", ".nsf", ".nsfe", ".spc", ".gbs",
                  ".ay", ".gym", ".hes", ".kss", ".sap"} | cli_render.EXTS
         if ext not in _skip:
@@ -306,6 +307,9 @@ class ControlsWidget(QWidget):
             from player import VIDEO_EXTS
             eng = None if ext in VIDEO_EXTS else getattr(self._player, "_dsp", None)
             self._wf.load(track.path, engine=eng, key=self._wave_key(track.path))
+        elif cli_render.supported(ext):
+            # rendered first, and chip_ready loads the shape: until then the track before must not stay up
+            self._wf.clear()
 
     def _on_shuffle_toggle(self, on: bool):
         self._player.shuffle = on
@@ -313,6 +317,19 @@ class ControlsWidget(QWidget):
     def _on_volume_changed(self, v: int):
         self._player.volume = _slider_to_vol(v)
         self._vol_pct.setText(f"{v}%")
+
+    def sync_from_player(self):
+        """Show volume, play mode and shuffle after something outside the window (the desktop's
+        media controls) changed them."""
+        pl = self._player
+        self._vol.blockSignals(True)
+        self._vol.setValue(_vol_to_slider(pl.volume))
+        self._vol.blockSignals(False)
+        self._vol_pct.setText(f"{self._vol.value()}%")
+        self._btn_mode.setText(_MODE_LABELS[pl.mode])
+        self._btn_shf.blockSignals(True)
+        self._btn_shf.setChecked(pl.shuffle)
+        self._btn_shf.blockSignals(False)
 
     def _cycle_mode(self):
         cur = self._player.mode
@@ -322,11 +339,11 @@ class ControlsWidget(QWidget):
         self._btn_mode.setText(_MODE_LABELS[nxt])
 
     def _on_track(self, track):
-        self._title.setText(track.title)
+        anim.set_text(self._title, track.title)
         sub = " / ".join(filter(None, [track.artist, track.album]))
-        self._sub.setText(sub)
+        anim.set_text(self._sub, sub)
         self._cur_path = track.path
-        self._subsong_row.setVisible(False)   # re-shown by _on_subsong_changed for multi-tune files
+        self._show_subsong_row(False)   # re-shown by _on_subsong_changed for multi-tune files
 
     # subsongs
     def _wave_key(self, path) -> str:
@@ -336,9 +353,34 @@ class ControlsWidget(QWidget):
             return f"{path}#sub{self._player.current_subsong}"
         return str(path)
 
+    def _show_subsong_row(self, on: bool):
+        """Over the right end of the title lines, which give up that much room. A row of its own made this
+        panel, and with it the window's minimum size, taller for a chiptune with subsongs and shorter again
+        for the next song."""
+        row = self._subsong_row
+        room = 0
+        if on:
+            row.adjustSize()
+            room = row.width() + 8
+        for lbl in (self._title, self._sub):
+            lbl.setContentsMargins(0, 0, room, 0)
+            lbl._relayout()
+        row.setVisible(on)
+        self._place_subsong_row()
+
+    def _place_subsong_row(self):
+        row, m = self._subsong_row, self.layout().contentsMargins()
+        if row.isVisible():
+            lines = self._title.height() + self._sub.height() + self.layout().spacing()
+            row.move(self.width() - m.right() - row.width(), m.top() + (lines - row.height()) // 2)
+            row.raise_()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_subsong_row()
+
     def _on_subsong_changed(self, cur: int, count: int):
         multi = count > 1
-        self._subsong_row.setVisible(multi)
         if multi:
             self._ss_label.setText(f"{cur + 1} / {count}")
             self._ss_prev.setEnabled(cur > 0)
@@ -352,15 +394,18 @@ class ControlsWidget(QWidget):
             self._ss_pick.blockSignals(True)
             self._ss_pick.setCurrentIndex(cur)
             self._ss_pick.blockSignals(False)
+            self._show_subsong_row(True)
             path = getattr(self, "_cur_path", None)
             if path is not None:
                 if Path(path).suffix.lower() in _SID_EXTS:
-                    # SID subsongs stream through the DSP engine — re-read the
-                    # engine buffer under this subsong's own cache key.
+                    # SID subsongs play through the DSP engine: read the engine buffer again
+                    # under this subsong's own cache key
                     eng = getattr(self._player, "_dsp", None)
                     self._wf.load(Path(path), engine=eng, key=self._wave_key(path))
                 else:
                     self._wf.load_gme(path, cur)
+        else:
+            self._show_subsong_row(False)
 
     def _on_subsong_pick(self, idx: int):
         self._player.set_subsong(idx)
@@ -372,13 +417,13 @@ class ControlsWidget(QWidget):
         self._player.set_subsong(self._player.current_subsong + 1)
 
     def _on_state(self, playing: bool):
-        self._btn_play.setText(_IC_PAUSE if playing else _IC_PLAY)
+        anim.set_text(self._btn_play, _IC_PAUSE if playing else _IC_PLAY)
 
     def _on_position(self, frac: float, cur: int, dur: int):
         if not self._seeking:
             self._seek.setValue(int(frac * 1000))
             if not self._wf._dragging:
-                self._wf.set_position(frac)
+                self._wf.glide_to(frac)
         self._time_cur.setText(_fmt(cur))
         self._time_dur.setText(_fmt(dur))
 
@@ -386,6 +431,6 @@ class ControlsWidget(QWidget):
         self._seeking = False
         self._player.seek(self._seek.value() / 1000.0)
 
-    # Keyboard shortcuts live in ONE place: MainWindow._handle_media_key (the
-    # app-wide event filter). A second keymap here made keys like M do different
-    # things depending on which widget had focus.
+    # Keyboard shortcuts live in one place, MainWindow._handle_media_key (the app-wide event
+    # filter). A second keymap here made keys like M do different things depending on which
+    # widget had focus.

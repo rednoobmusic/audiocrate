@@ -1,0 +1,61 @@
+{
+ "version": 1,
+ "slides": [
+  {
+   "id": "welcome",
+   "title": "Welcome",
+   "text": "AudioCrate plays the music files you already have. Drop files or folders onto the window (1) to add them to the playlist, or use Add files and Add folder in the File menu. This tour takes about a minute.",
+   "image": "welcome.png",
+   "alt": "The AudioCrate window while a song plays: cover, playlist, transport controls, spectrum, oscilloscope and waterfall."
+  },
+  {
+   "id": "play",
+   "title": "Playlist",
+   "text": "Double click a song (1) to play it. Right click a song for its menu (2), which can also send it to a device or open the tag editor.",
+   "image": "play.png",
+   "alt": "The playlist with a song marked by pin 1 and its right click menu open, with Play now marked by pin 2."
+  },
+  {
+   "id": "sound",
+   "title": "Equalizer",
+   "text": "Drag a point on the Equalizer curve (1) and the sound changes right away. The EQ button (2) turns the equalizer off and on, and the wand (3) in the Controls panel does the same for Enhance.",
+   "image": "sound.png",
+   "alt": "The Equalizer panel with its curve (pin 1) and EQ button (pin 2), and the Controls panel with the Enhance wand (pin 3)."
+  },
+  {
+   "id": "visuals",
+   "title": "Visualizers",
+   "text": "The spectrum (1) and the oscilloscope (2) show what is playing right now, and the waterfall (3) keeps the last few seconds of the spectrum. All three are in the View menu (4). Milkdrop is listed there too but needs projectM.",
+   "image": "visuals.png",
+   "alt": "The spectrum (pin 1), oscilloscope (pin 2) and waterfall (pin 3) panels, with the View menu open (pin 4)."
+  },
+  {
+   "id": "panels",
+   "title": "Panels",
+   "text": "Each panel can float as a window of its own (1). The button on its bar (2) floats it, and right clicking the bar or a tab (3) opens a menu that also moves it to another side. AudioCrate remembers the layout.",
+   "image": "panels.png",
+   "alt": "A floating Oscilloscope window (pin 1), the float button on a panel bar (pin 2) and the menu of that bar (pin 3)."
+  },
+  {
+   "id": "online",
+   "title": "Online",
+   "text": "Type a song or an artist in the search box (1) to search YouTube, or paste a link from X or another site. Play (2) plays it here and Save (3) keeps a copy in your library. It needs yt-dlp, and the panel offers to get it if it is missing.",
+   "image": "online.png",
+   "alt": "The Online panel with search results: the search box is pin 1, the Play button pin 2 and the Save button pin 3."
+  },
+  {
+   "id": "devices",
+   "title": "Devices",
+   "text": "A USB stick or an iPod gets a card (1) when you plug it in. The copy button (2) puts songs on it, and the list (3) shows what is on it already. An iPhone can be browsed and copied from, but iOS does not let AudioCrate add songs to the Music app.",
+   "image": "devices.png",
+   "alt": "The Devices panel: a card for each device (pin 1), the copy button (pin 2) and the songs on the selected iPod (pin 3)."
+  },
+  {
+   "id": "yours",
+   "title": "Settings",
+   "text": "The Appearance tab has a Use system style and colours box (1) that follows your desktop. With it off, the Style list (2) picks Default or Frutiger Aero. The tour is on the System tab and in the Help menu if you want it again.",
+   "image": "yours.png",
+   "alt": "The Settings panel on its Appearance tab: the system colours option is pin 1 and the style choice pin 2."
+  }
+ ]
+}

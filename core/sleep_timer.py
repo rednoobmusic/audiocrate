@@ -1,8 +1,8 @@
-"""Sleep timer — pause playback after a fixed delay.
+"""Sleep timer: pause playback after a fixed delay.
 
-The timed countdown lives here; the "end of current track" mode is handled by
+The timed countdown lives here. The "end of current track" mode is handled by
 the Player (set_stop_after_current), since only the player knows when a track
-truly ends (and it must disable gapless preload so the track doesn't roll on).
+ends and it must turn off gapless preload so the next track does not start.
 """
 from __future__ import annotations
 
