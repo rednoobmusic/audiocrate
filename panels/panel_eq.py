@@ -3,13 +3,12 @@
 Drag a point to set its frequency (x) and gain (y), right-click the graph to add a band there,
 double-click a point to remove it, scroll over a point to change its Q. Each band has type, freq,
 gain, Q and slope controls, and there are input and output trims and a bypass. Presets are
-named files in ~/Documents/EQPresets; the current state is kept in ~/.config/audiocrate/eq.json.
+named files in an EQPresets folder in Documents; the current state is kept in eq.json in the config folder.
 """
 from __future__ import annotations
 import json
 import safe_write
 import math
-from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QSize, QTimer, Signal
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QInputDialog, QMessageBox, QSizePolicy, QLayout,
 )
 
+import plat_paths
 import power
 from applog import log
 from dsp_chain import (
@@ -26,10 +26,10 @@ from dsp_chain import (
     EQ_SLOPES, EQ_SLOPE_TYPES,
 )
 
-_CFG_DIR     = Path.home() / ".config" / "audiocrate"
+_CFG_DIR     = plat_paths.config_dir()
 _EQ_STATE    = _CFG_DIR / "eq.json"
-# Presets live in ~/Documents/EQPresets, one .json each, so they are easy to find, share and back up.
-_PRESET_DIR  = Path.home() / "Documents" / "EQPresets"
+# Presets live in an EQPresets folder in Documents, one .json each, so they are easy to find, share and back up.
+_PRESET_DIR  = plat_paths.documents_dir() / "EQPresets"
 _GRID_FREQS  = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 _GRID_GAINS  = [-24, -18, -12, -6, 0, 6, 12, 18, 24]
 _HIT_PX      = 16
@@ -716,7 +716,7 @@ class EqWidget(QWidget):
     # presets
     @staticmethod
     def _migrate_presets():
-        """One-time move of presets from the old config dir to ~/Documents/EQPresets."""
+        """One-time move of presets from the old config dir to the EQPresets folder in Documents."""
         old = _CFG_DIR / "eq_presets"
         try:
             if old.is_dir():

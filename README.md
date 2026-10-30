@@ -23,6 +23,23 @@ and SAP (libgme), tracker modules such as MOD, XM, IT and S3M (openmpt123), and
 ZX/AY native formats (zxtune123). Formats with several subsongs get prev/next
 buttons and a picker.
 
+On Windows the same formats play through files that sit in the program's own
+folders. `libs\` beside `main.py` holds `libgme.dll` (VGM, VGZ, NSF, NSFe, SPC,
+GBS, AY, GYM, HES, KSS and SAP), `libfurnace_wrap.dll` (Furnace), `libsid_wrap.dll`
+(SID) and `projectM-4.dll` with `projectM-4-playlist.dll` (the Milkdrop visualizer),
+with the licence texts in `libs\LICENSES`. `tools\` holds `openmpt123.exe` (tracker
+modules) and, in a folder of its own with the DLLs that belong to it,
+`tools\zxtune123\zxtune123.exe` (the ZX formats: PT3, STC, PSG and the rest). The
+release build adds zxtune123, the official build of the same revision as the Linux
+package; a source checkout has no zxtune123 until it is unpacked there, and until
+then those formats are not offered and `.vgm`, `.vgz` and `.ay` play through libgme.
+The DLLs import system DLLs only. The song length database goes in
+`%LOCALAPPDATA%\AudioCrate\Data\Songlengths.md5`, and Milkdrop presets in
+`%LOCALAPPDATA%\AudioCrate\Data\presets` or in a `presets` folder beside the program.
+No presets ship with the program; with none, the Milkdrop panel says where to put them. On a
+computer that cannot give it OpenGL 3.3 (a remote desktop, a graphics driver that is not
+installed) the panel stays off and says so, and the other visualizers work as usual.
+
 ### Chiptune lengths
 
 SID files carry no duration, and many chip formats report a wrong one. Every
@@ -182,6 +199,13 @@ search, playlists with undo and drag reordering, synced lyrics (LRCLIB), MPRIS
 (media keys, playerctl and the media controls of Plasma and GNOME), Discord Rich
 Presence, Last.fm scrobbling, play statistics, sleep timer.
 
+On Windows the media keys, the volume card and the lock screen are Windows' own system
+media controls: they show the title, artist, album, cover and position, and their buttons
+(play, pause, next, previous, seek, shuffle, repeat) control the player. When Windows will
+not give the program a media session, the four media keys are taken as hotkeys instead,
+which keeps the keys working but leaves the volume card and lock screen out. The log says
+which of the two happened.
+
 A song with several artists is listed under each of them in the Artists view, with
 the albums and tracks under every name. Settings, Artist names says how a tag with
 one string is split: at commas, at ampersands and, if you turn it on, at slashes
@@ -214,6 +238,11 @@ The installer detects your package manager and offers to install them.
 Optional: `libsidplayfp` (C64 SID), `libgme` (VGM/NSF/SPC playback),
 `openmpt123` (tracker modules), `zxtune123` (AY/YM/ZX formats),
 `libprojectm` (Milkdrop visualizer), `pypresence` (Discord Rich Presence).
+
+On Windows the media controls need the `winrt-runtime`, `winrt-Windows.Foundation`,
+`winrt-Windows.Foundation.Collections`, `winrt-Windows.Media`, `winrt-Windows.Media.Playback`,
+`winrt-Windows.Storage` and `winrt-Windows.Storage.Streams` packages (all version 3.2.1, MIT
+licence; they pull in `typing_extensions`, PSF-2.0). `requirements.txt` lists them for Windows only.
 
 For Online: `yt-dlp` and a JavaScript runtime (`deno`; yt-dlp also accepts `node` 22 or newer), and
 `gallery-dl` if you want X profiles. For Devices: `udisks2` with `busctl`, which comes with systemd (finding drives,

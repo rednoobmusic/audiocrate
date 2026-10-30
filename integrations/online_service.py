@@ -22,9 +22,7 @@ import os
 import platform
 import re
 import secrets
-import selectors
 import shutil
-import signal
 import socket
 import stat
 import subprocess
@@ -42,6 +40,9 @@ from urllib.parse import unquote, urlsplit
 from PySide6.QtCore import QObject, Qt, Signal
 
 from applog import log
+import plat_fs
+import plat_paths
+import plat_proc
 from ffmpeg_util import ffmpeg_path
 from online_providers import (LINK, PROVIDERS, Provider, is_direct_audio, listing_url,
                               normalize_url, provider_for_url, x_url_kind)
@@ -262,7 +263,7 @@ def _atomic_write(path: Path, data: str, mode: int = 0o600) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
-        os.replace(tmp, path)
+        plat_fs.replace(tmp, path)
     except BaseException:
         try:
             tmp.unlink()
@@ -542,7 +543,7 @@ _POST_NAMES = {"ExtractAudio": "Extracting audio", "Merger": "Joining video and 
 # settings
 
 def _download_dir() -> str:
-    return str(Path.home() / "Music" / "AudioCrate")
+    return str(plat_paths.music_dir() / "AudioCrate")
 
 
 DEFAULTS = {
@@ -622,7 +623,7 @@ class _Config:
         data = {k: copy.deepcopy(v) for k, v in DEFAULTS.items()}
         data["save_dir"] = _download_dir()
         try:
-            fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)         # a named pipe would block a plain open
+            fd = plat_fs.open_regular(self.path)
             with os.fdopen(fd, encoding="utf-8") as f:
                 if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                     return data
@@ -667,71 +668,8 @@ class _Config:
 
 # child processes
 
-_ENV_KEEP = {
-    "PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
-    "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE",
-    "DESKTOP_SESSION", "KDE_SESSION_VERSION", "KDE_FULL_SESSION", "GNOME_DESKTOP_SESSION_ID",
-    "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
-    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-}
-
 _children: set = set()
 _children_lock = threading.Lock()
-
-
-def _child_env(tmpdir: Path | None = None) -> dict:
-    """A small environment for yt-dlp and friends.
-
-    Only what they need to find programs, a proxy and the desktop's keyring, so a
-    bundled library path or a stray Python variable of ours cannot break them.
-    """
-    env = {k: v for k, v in os.environ.items() if k in _ENV_KEEP or k.startswith("LC_")}
-    path = [p for p in env.get("PATH", "").split(":") if p]
-    for extra in (Path.home() / ".deno" / "bin", Path.home() / ".local" / "bin"):
-        if str(extra) not in path:
-            path.append(str(extra))
-    env["PATH"] = ":".join(path) or "/usr/bin:/bin"
-    if os.environ.get("LD_LIBRARY_PATH_ORIG"):          # set by a PyInstaller bundle
-        env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH_ORIG"]
-    env.update(PYTHONWARNINGS="ignore", PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
-               PYINSTALLER_RESET_ENVIRONMENT="1")
-    if tmpdir is not None:
-        env["TMPDIR"] = str(tmpdir)
-    return env
-
-
-# What a guard does: wait on its stdin, whose other end is this process. When it ends in any way, even
-# SIGKILL or os._exit, the pipe closes and the guard ends the child's process group and removes the private
-# folders it was given. If the child is already done the program says so and nothing is touched, since a
-# finished group's number may belong to somebody else by then.
-_GUARD = ('read -r x; [ "$x" = done ] && exit 0; g=$1; shift; kill -s KILL -- "-$g" 2>/dev/null; '
-          '[ $# -gt 0 ] && rm -rf -- "$@"; exit 0')
-
-
-class _Guard:
-    """A small /bin/sh in a session of its own that outlives this process just long enough to clean up after it."""
-
-    def __init__(self, pgid: int, private=None):
-        args = ["/bin/sh", "-c", _GUARD, "sh", str(pgid)] + ([str(private)] if private else [])
-        self.lock = threading.Lock()
-        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     start_new_session=True, env=_child_env(), close_fds=True)
-
-    def release(self) -> None:
-        with self.lock:
-            p, self.proc = self.proc, None
-        if p is None:
-            return
-        try:
-            p.stdin.write(b"done\n")
-            p.stdin.close()
-        except OSError:
-            pass
-        try:
-            p.wait(2)
-        except subprocess.TimeoutExpired:
-            pass
 
 
 def _spawn(args, merge: bool = False, cwd=None, tmpdir=None, private=None) -> subprocess.Popen:
@@ -739,77 +677,26 @@ def _spawn(args, merge: bool = False, cwd=None, tmpdir=None, private=None) -> su
     process disappears. Never a shell. private is a folder that goes with the child and goes with it."""
     p = subprocess.Popen([str(a) for a in args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT if merge else subprocess.PIPE,
-                         start_new_session=True, env=_child_env(tmpdir), cwd=cwd, close_fds=True)
-    try:
-        os.setpriority(os.PRIO_PROCESS, p.pid, min(19, os.getpriority(os.PRIO_PROCESS, 0) + 10))   # the audio engine matters more
-    except OSError:
-        pass
-    try:
-        p.guard = _Guard(p.pid, private)
-    except OSError:
-        p.guard = None
+                         env=plat_proc.child_env(tmpdir), cwd=cwd, close_fds=True, **plat_proc.popen_kwargs(low=True))
+    plat_proc.lower_priority(p)                 # the audio engine matters more
+    plat_proc.watch(p, private)
     with _children_lock:
         _children.add(p)
     return p
 
 
-def _forget(p) -> None:
+def _stop(procs, sigs=plat_proc.LADDER, grace: float = 3.0) -> None:
+    """Stop whole process groups, all at once, and forget them. Ask first, then insist."""
+    plat_proc.stop(procs, sigs, grace)
     with _children_lock:
-        _children.discard(p)
-    guard, p.guard = getattr(p, "guard", None), None
-    if guard is not None:
-        guard.release()
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _group_alive(p) -> bool:
-    """True while the child or anything it started is still running."""
-    if p.poll() is None:
-        return True
-    try:
-        os.killpg(p.pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
-
-
-def _stop(procs, sigs=(signal.SIGINT, signal.SIGTERM, signal.SIGKILL), grace: float = 3.0) -> None:
-    """Stop whole process groups, all at once. Ask first, then insist.
-
-    SIGINT first because yt-dlp then leaves the bytes it already wrote, and the
-    next run carries on from them. Blocks for as long as the grace periods.
-    """
-    procs = [p for p in procs if p is not None]
-    for sig in sigs:
-        live = [p for p in procs if _group_alive(p)]
-        if not live:
-            break
-        for p in live:
-            try:
-                os.killpg(p.pid, sig)
-            except (ProcessLookupError, PermissionError):
-                pass
-        end = time.monotonic() + (1.0 if sig == signal.SIGKILL else grace)
-        while time.monotonic() < end and any(_group_alive(p) for p in live):
-            time.sleep(0.02)
-    for p in procs:
-        _forget(p)
+        _children.difference_update(procs)
 
 
 def _kill_children() -> None:
     with _children_lock:
         procs = list(_children)
     if procs:
-        _stop(procs, (signal.SIGTERM, signal.SIGKILL), 1.5)
+        _stop(procs, (plat_proc.TERM, plat_proc.KILL), 1.5)
 
 
 atexit.register(_kill_children)
@@ -860,13 +747,13 @@ def _capture(args, timeout: float, ctl: _Ctl | None = None, cwd=None, tmpdir=Non
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed = True
-        _stop([p], (signal.SIGTERM, signal.SIGKILL), 2.0)
+        _stop([p], (plat_proc.TERM, plat_proc.KILL), 2.0)
         try:
             out, err = p.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             out, err = b"", b""
     finally:
-        _stop([p], (signal.SIGTERM, signal.SIGKILL), 1.0)    # anything it left behind
+        _stop([p], (plat_proc.TERM, plat_proc.KILL), 1.0)    # anything it left behind
     return p.returncode, _text(out), _text(err), timed
 
 
@@ -1261,10 +1148,9 @@ class OnlineService(QObject):
     def __init__(self, parent=None, config_dir: Path | None = None, cache_dir: Path | None = None,
                  data_dir: Path | None = None):
         super().__init__(parent)
-        home = Path.home()
-        cfg = Path(config_dir) if config_dir else Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "audiocrate"
-        cache = Path(cache_dir) if cache_dir else Path(os.environ.get("XDG_CACHE_HOME") or home / ".cache") / "audiocrate" / "online"
-        data = Path(data_dir) if data_dir else Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "audiocrate"
+        cfg = Path(config_dir) if config_dir else plat_paths.config_dir(xdg=True)
+        cache = Path(cache_dir) if cache_dir else plat_paths.cache_dir(xdg=True) / "online"
+        data = Path(data_dir) if data_dir else plat_paths.data_dir(xdg=True)
         self.config_dir, self.cache_dir = cfg, cache
         self.media_dir, self.thumbs_dir = cache / "media", cache / "thumbs"
         self.tmp_dir, self.ytdlp_cache = cache / "tmp", cache / "ytdlp"
@@ -1342,7 +1228,7 @@ class OnlineService(QObject):
             return
         for name in names:
             m = re.match(r"jar_(\d+)_", name)
-            if m and not _pid_alive(int(m.group(1))):
+            if m and not plat_proc.is_alive(int(m.group(1))):
                 _rmtree(self.tmp_dir / name)
 
     def _submit_list(self, rid: int, req: _Req, fn) -> None:
@@ -1384,7 +1270,7 @@ class OnlineService(QObject):
         owned = self.bin_dir / "yt-dlp"
         if owned.is_file():
             return str(owned)
-        return shutil.which("yt-dlp", path=_child_env()["PATH"])
+        return shutil.which("yt-dlp", path=plat_proc.child_env()["PATH"])
 
     def _js_args(self) -> list[str]:
         """Tell yt-dlp where the JavaScript runtime is, when the probe found one it cannot find itself."""
@@ -1393,7 +1279,7 @@ class OnlineService(QObject):
         v = parse_version(t["ytdlp"]["version"]) if t else ()
         if not rt or v < (2025, 11, 1):
             return []
-        if rt["name"] == "deno" and shutil.which("deno", path=_child_env()["PATH"]) == rt["path"]:
+        if rt["name"] == "deno" and shutil.which("deno", path=plat_proc.child_env()["PATH"]) == rt["path"]:
             return []
         return ["--js-runtimes", f"{rt['name']}:{rt['path']}"]
 
@@ -1767,7 +1653,7 @@ class OnlineService(QObject):
         part = dst.with_name(dst.name + ".part")
         try:
             shutil.copy2(src, part)
-            os.replace(part, dst)
+            plat_fs.replace(part, dst)
         except OSError as e:
             part.unlink(missing_ok=True)
             raise _Fail(*_write_error(e)) from None
@@ -1888,7 +1774,7 @@ class OnlineService(QObject):
         try:
             path, tail, stalled = self._read(job, proc, token)
         finally:
-            _stop([proc], (signal.SIGTERM, signal.SIGKILL), 1.0)          # anything it left behind
+            _stop([proc], (plat_proc.TERM, plat_proc.KILL), 1.0)          # anything it left behind
             proc.stdout.close()
             done(path is not None and proc.returncode == 0)
         text = "\n".join(tail)
@@ -1908,9 +1794,7 @@ class OnlineService(QObject):
 
     def _read(self, job: _Job, proc: subprocess.Popen, token: str = ""):
         """Read yt-dlp's output until it ends. Returns (final path or None, last lines, stalled)."""
-        sel = selectors.DefaultSelector()
-        sel.register(proc.stdout, selectors.EVENT_READ)
-        fd = proc.stdout.fileno()
+        reader = plat_proc.PipeReader(proc.stdout)
         prog = _Progress(2 if job.mode == "video" else 1)
         buf, tail, path = b"", deque(maxlen=60), None
         last, stalled = time.monotonic(), False
@@ -1933,7 +1817,7 @@ class OnlineService(QObject):
 
         try:
             while True:
-                ready = sel.select(1.0)
+                ready = reader.wait(1.0)
                 if job.ctl.cancelled:
                     break
                 if not ready:
@@ -1943,7 +1827,7 @@ class OnlineService(QObject):
                         stalled = True
                         break
                     continue
-                chunk = os.read(fd, 65536)
+                chunk = ready[0][1]
                 if not chunk:
                     break
                 last = time.monotonic()
@@ -1955,7 +1839,7 @@ class OnlineService(QObject):
             if buf:
                 line_in(buf)
         finally:
-            sel.close()
+            reader.close()
         if stalled:
             _stop([proc])
         try:
@@ -2041,7 +1925,7 @@ class OnlineService(QObject):
                 if stop.is_set():
                     raise _Cancel()
                 try:
-                    os.replace(part, final)
+                    plat_fs.replace(part, final)
                     write_sidecar(final, job.item, job.mode)
                 except OSError as e:
                     raise _Fail(*_write_error(e)) from None
@@ -2163,7 +2047,7 @@ class OnlineService(QObject):
                 age = now - e.stat().st_mtime
                 m = re.match(r"jar_(\d+)_", e.name)
                 if m:                                         # a private cookie folder of this or another process
-                    gone = not _pid_alive(int(m.group(1)))
+                    gone = not plat_proc.is_alive(int(m.group(1)))
                 elif "-" in e.name:                           # a partial fetch, named by item_key
                     gone = everything or age > 2 * 86400
                 else:                                         # a cookie folder from before they were named by process
@@ -2377,7 +2261,7 @@ class OnlineService(QObject):
         try:
             # Made by us so it is private (yt-dlp would make it readable by everyone), and with the
             # header line because yt-dlp refuses to load a cookies file that is empty.
-            with os.fdopen(os.open(jar, os.O_WRONLY | os.O_CREAT, 0o600), "w") as f:
+            with os.fdopen(os.open(jar, os.O_WRONLY | os.O_CREAT, 0o600), "w", encoding="utf-8") as f:
                 f.write("# Netscape HTTP Cookie File\n")
             spec = src["browser"] + (":" + src["profile"] if src["profile"] else "")
             # A closed local port: yt-dlp loads the browser's cookies, fails to fetch, and still saves them.
@@ -2424,7 +2308,7 @@ class OnlineService(QObject):
         env = os.environ.get("AUDIOCRATE_GALLERY_DL")
         if env:
             return env
-        found = shutil.which("gallery-dl", path=_child_env()["PATH"])
+        found = shutil.which("gallery-dl", path=plat_proc.child_env()["PATH"])
         if found:
             return found
         extra = Path.home() / ".local" / "python311" / "bin" / "gallery-dl"
@@ -2544,7 +2428,7 @@ class OnlineService(QObject):
         env = os.environ.get("AUDIOCRATE_YTDLP")
         cands = [env] if env else []
         if not env:
-            for c in (owned, shutil.which("yt-dlp", path=_child_env()["PATH"])):
+            for c in (owned, shutil.which("yt-dlp", path=plat_proc.child_env()["PATH"])):
                 if c and c not in cands and Path(c).is_file():
                     cands.append(c)
         found = [(parse_version(v), c, v) for c in cands if (v := self._version_of([c, "--version"]))]
@@ -2568,7 +2452,7 @@ class OnlineService(QObject):
     def _probe_js(self) -> dict:
         found = []
         for name, low, high, rx in _JS_RUNTIMES:
-            path = shutil.which(name, path=_child_env()["PATH"])
+            path = shutil.which(name, path=plat_proc.child_env()["PATH"])
             if not path:
                 continue
             m = re.search(rx, self._version_of([path, "--version"]))
@@ -2653,7 +2537,7 @@ class OnlineService(QObject):
             version = self._version_of([str(new), "--version"])
             if not parse_version(version):
                 raise _Fail("failed", "The downloaded yt-dlp did not start, so it was not installed.")
-            os.replace(new, owned)
+            plat_fs.replace(new, owned)
         finally:
             new.unlink(missing_ok=True)
         return {"title": "yt-dlp", "count": 0, "more": False, "source": "update", "query": "",
@@ -2716,7 +2600,7 @@ class OnlineService(QObject):
             s.close()
         for c in ctls:
             c.event.set()
-        _stop([c.proc for c in ctls], (signal.SIGINT, signal.SIGKILL), 0.15)      # the window is closing: be quick
+        _stop([c.proc for c in ctls], (plat_proc.INT, plat_proc.KILL), 0.15)      # the window is closing: be quick
         for s in slots:
             s.join(5)
         _kill_children()

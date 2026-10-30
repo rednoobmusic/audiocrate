@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import plistlib
 import re
-import selectors
 import shutil
 import sqlite3
 import subprocess
@@ -20,7 +19,12 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-GVFS_ROOT = Path('/run/user/%d/gvfs' % os.getuid())
+import plat_proc
+
+if hasattr(os, 'getuid'):
+    GVFS_ROOT = Path('/run/user/%d/gvfs' % os.getuid())
+else:
+    GVFS_ROOT = Path('/run/user/0/gvfs')            # Windows has no GVfs and no uids, so nothing is ever found here
 INSTALL_HINT = ("Install libimobiledevice, usbmuxd and gvfs-afc (usually the packages libimobiledevice, usbmuxd "
                 "and gvfs) to use an iPhone or iPad.")
 IOS_NOTE = ("iOS does not let other programs add music to the Music app. "
@@ -63,20 +67,16 @@ def _drain(p: subprocess.Popen, end: float, limit: int) -> tuple[bytes, bytes, s
     """Read stdout and stderr until both close, but no more than `limit` bytes of either and not past `end`.
     The third item says why it stopped early, 'late' or 'big', '' when the tool finished by itself."""
     got = {p.stdout: bytearray(), p.stderr: bytearray()}
-    with selectors.DefaultSelector() as sel:
-        for f in got:
-            sel.register(f, selectors.EVENT_READ)
-        while sel.get_map():
+    with plat_proc.PipeReader(*got) as reader:
+        while reader.live:
             left = end - time.monotonic()
             if left <= 0:
                 return bytes(got[p.stdout]), bytes(got[p.stderr]), 'late'
-            for key, _ in sel.select(left):
-                chunk = os.read(key.fd, 65536)
+            for pipe, chunk in reader.wait(left):
                 if not chunk:
-                    sel.unregister(key.fileobj)
                     continue
-                got[key.fileobj] += chunk
-                if len(got[key.fileobj]) > limit:
+                got[pipe] += chunk
+                if len(got[pipe]) > limit:
                     return bytes(got[p.stdout]), bytes(got[p.stderr]), 'big'
     return bytes(got[p.stdout]), bytes(got[p.stderr]), ''
 
@@ -88,7 +88,8 @@ def _run(args: list[str], timeout: float = 10, limit: int = LIMIT) -> tuple[int,
     # whenever a phone is plugged in, so a mount took half a minute. The mount itself needs none of them.
     env = dict(os.environ, GVFS_REMOTE_VOLUME_MONITOR_IGNORE='1') if args and args[0] == 'gio' else None
     try:
-        p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                             **plat_proc.popen_kwargs(group=False))
     except FileNotFoundError:
         return -1, '', '%s is not installed' % args[0]
     except OSError as e:

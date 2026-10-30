@@ -11,7 +11,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-_CACHE_DIR = Path.home() / ".config" / "audiocrate" / "lyrics"
+import plat_paths
+
+_CACHE_DIR = plat_paths.config_dir() / "lyrics"
 _API = "https://lrclib.net"
 _UA = "AudioCrate/1.0"
 _TIMEOUT = 6.0

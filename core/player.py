@@ -1057,7 +1057,7 @@ class Player(QObject):
             if t is not None and t.path.suffix.lower() in _FUR_EXTS:
                 hint = "unsupported or corrupt module"   # libfurnace is built in
             else:
-                hint = "is openmpt123/zxtune123 installed?"
+                hint = cli_render.missing_hint()
             self.error.emit(f"Could not render {name}: {hint}")
             self._advance_past_failure()
             return

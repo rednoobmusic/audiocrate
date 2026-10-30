@@ -1,8 +1,11 @@
 from __future__ import annotations
 import subprocess
+import sys
 import threading
 import numpy as np
 from pathlib import Path
+
+import plat_proc
 
 BANDS = 128
 _RATE = 44100
@@ -134,11 +137,16 @@ class Analyzer:
 
     def _decode(self, path: Path, gen: int):
         try:
+            exe = "ffmpeg"
+            if sys.platform == "win32":
+                from ffmpeg_util import ffmpeg_path
+                exe = ffmpeg_path() or exe          # the copy that ships with the program is not on PATH
             proc = subprocess.Popen(
-                ["ffmpeg", "-i", str(path),
+                [exe, "-i", str(path),
                  "-f", "f32le", "-ar", str(_RATE), "-ac", "1", "-vn", "-"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                **plat_proc.popen_kwargs(group=False),
             )
             done = threading.Event()
 

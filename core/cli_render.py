@@ -11,9 +11,14 @@ from __future__ import annotations
 import shutil
 import hashlib
 import subprocess
+import sys
 from pathlib import Path
 
-_CACHE = Path.home() / ".cache" / "audiocrate" / "chiprender"
+import plat_fs
+import plat_paths
+import plat_proc
+
+_CACHE = plat_paths.cache_dir() / "chiprender"
 
 # AY/YM, native ZX formats and VGM (zxtune renders these better than libgme)
 _ZXTUNE_EXTS = {
@@ -32,15 +37,27 @@ EXTS = _ZXTUNE_EXTS | _OPENMPT_EXTS
 
 def tool_for(ext: str) -> str | None:
     ext = ext.lower()
-    if ext in _ZXTUNE_EXTS and shutil.which("zxtune123"):
+    if ext in _ZXTUNE_EXTS and plat_proc.which("zxtune123"):
         return "zxtune"
-    if ext in _OPENMPT_EXTS and shutil.which("openmpt123"):
+    if ext in _OPENMPT_EXTS and plat_proc.which("openmpt123"):
         return "openmpt"
     return None
 
 
 def supported(ext: str) -> bool:
     return tool_for(ext) is not None
+
+
+def _exe(name: str) -> str:
+    """The program to start. Windows gets the full path, because the tools folder is not on PATH; elsewhere the name does."""
+    return (plat_proc.which(name) or name) if sys.platform == "win32" else name
+
+
+def missing_hint() -> str:
+    """What to check when a module or a ZX file that has a renderer still comes out empty."""
+    if sys.platform == "win32":
+        return "are openmpt123.exe and zxtune123.exe in the tools folder?"
+    return "is openmpt123/zxtune123 installed?"
 
 
 def _cache_path(src: Path) -> Path:
@@ -67,7 +84,7 @@ def render(src, timeout: int = 180) -> str | None:
     try:
         if tool == "zxtune":
             produced = out.with_name(out.stem + ".part.wav")
-            cmd = ["zxtune123", "--wav", f"filename={produced}", str(src)]
+            cmd = [_exe("zxtune123"), "--wav", f"filename={produced}", str(src)]
         else:
             # openmpt123 --render writes "<input>.wav" next to the input; stage a
             # link in the cache dir so the output lands there and the source folder
@@ -80,12 +97,12 @@ def render(src, timeout: int = 180) -> str | None:
             except OSError:
                 shutil.copy2(src, link)
             produced = Path(str(link) + ".wav")
-            cmd = ["openmpt123", "--render", "--output-type", "wav", str(link)]
+            cmd = [_exe("openmpt123"), "--render", "--output-type", "wav", str(link)]
 
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=timeout)
+                       timeout=timeout, **plat_proc.popen_kwargs(group=False))
         if produced.exists() and produced.stat().st_size > 1024:
-            produced.replace(out)
+            plat_fs.replace(produced, out)
             from native_lock import prune_cache
             prune_cache(_CACHE)
             return str(out)

@@ -1,4 +1,4 @@
-"""Playback and rendering of .fur modules through libfurnace_wrap.so.
+"""Playback and rendering of .fur modules through libfurnace_wrap (libfurnace_wrap.so, libfurnace_wrap.dll on Windows).
 
 FurPlayer is a QObject that drives a QAudioSink from a render thread, fur_tags reads title, artist and
 system for a player.py Track, and FUR_EXTS is the set of supported extensions.
@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 import threading
 import tempfile
 from pathlib import Path
 
 import numpy as np
 
+import plat_native
+import plat_paths
 from native_lock import RENDER_LOCK
 
 from PySide6.QtCore    import QObject, Signal, QTimer
@@ -26,14 +29,8 @@ _SO_SEARCH = [
     Path("/usr/local/lib/libfurnace_wrap.so"),
 ]
 
-_lib: ctypes.CDLL | None = None
-for _p in _SO_SEARCH:
-    if _p.exists():
-        try:
-            _lib = ctypes.CDLL(str(_p))
-            break
-        except OSError:
-            pass
+_LIB_FILE = "libfurnace_wrap.dll" if sys.platform == "win32" else "libfurnace_wrap.so"
+_lib: ctypes.CDLL | None = plat_native.load(_SO_SEARCH, _LIB_FILE)
 
 FUR_EXTS = {".fur"}
 
@@ -243,7 +240,7 @@ class FurPlayer(QObject):
     def __init__(self, audio_device: QAudioDevice | None = None, parent=None):
         super().__init__(parent)
         if _lib is None:
-            raise RuntimeError("libfurnace_wrap.so not found, so .fur files cannot be played")
+            raise RuntimeError(f"{_LIB_FILE} not found, so .fur files cannot be played")
 
         # DivEngine keeps its chip-definition table in a static array
         # (engine.h: `static DivSysDef* sysDefs[]`) but tracks registration with
@@ -625,7 +622,7 @@ class FurPlayer(QObject):
         through a playlist of modules would wait for renders nobody wants any more.
         """
         import hashlib
-        cache = Path.home() / ".cache" / "audiocrate" / "chiprender"
+        cache = plat_paths.cache_dir() / "chiprender"
         try:
             st = path.stat()
             key = f"{path}|{st.st_mtime_ns}|{st.st_size}|fur"

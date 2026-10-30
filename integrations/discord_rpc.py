@@ -11,6 +11,8 @@ from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from player import Player
 from player import extract_art
 import logs
+import plat_paths
+import plat_proc
 
 _log = logs.get("discord")
 
@@ -53,7 +55,7 @@ class DiscordRPCService(QObject):
         self._last_payload_key = None
         self._play_anchor_ts: int | None = None
         self._art_base_url = ""
-        self._art_cache_dir = Path.home() / ".cache" / "audiocrate" / "discord_art"
+        self._art_cache_dir = plat_paths.cache_dir() / "discord_art"
         try:
             self._art_cache_dir.mkdir(parents=True, exist_ok=True)
         except OSError:                           # no cover art for Discord, but the program still starts
@@ -230,7 +232,7 @@ class DiscordRPCService(QObject):
             ok = False
             try:
                 r = subprocess.run(cmd, shell=True, timeout=45,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **plat_proc.popen_kwargs(group=False))
                 ok = (r.returncode == 0)
                 if not ok:
                     _log.warning("album art upload failed (exit %s): %s", r.returncode,

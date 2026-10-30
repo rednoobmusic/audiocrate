@@ -19,6 +19,8 @@
 - The Online panel no longer opens a new install with a warning about the JavaScript runtime or an old yt-dlp. The notes appear when you first search or open a link.
 - A new install opened on the Settings tab. It now opens on the Playlist.
 - Memory. The next song was decoded as soon as the current one started, so the player held two decoded songs for nearly the whole of every song, and an hour long mix meant hundreds of megabytes more. It is now decoded a minute before the current song ends, or at once when the song is shorter than that or its length is not known yet. That roughly halves what playback holds. A seek or a pause moves the moment, and gapless playback is unchanged.
+- Windows: the 1 ms timer tick and the opt-out from background throttling were held for as long as the program ran. They are now taken while a song plays and given back five seconds after it stops, so a player left paused in the background no longer keeps the whole machine on a fast timer. The memory that start-up leaves behind is handed back to the system once the window is up.
+- Windows: turning on lighting started a thread that failed at once, because the Predator keyboard controller exists only on Linux. It is no longer started there, and the keyboard, lid emblem and mode LED settings are hidden.
 
 ## 1.6.0 (2026-10-27)
 
@@ -29,7 +31,7 @@
   so stopping, pausing, skipping and seeking keep what you wired. Choosing another output opens a new stream on it.
   A song you stop or skip plays on for a moment (about a tenth of a second), because what is queued in an open
   stream cannot be thrown away. Chiptunes played by the libgme player and the sound of videos still use streams of
-  their own.
+  their own. Windows has no patchbay, so the setting is not shown there.
 - DSP chain. The DSP panel (View, DSP; it starts hidden) is a list of effects that you add, drag
   into order and bypass one by one, like foobar2000's DSP manager. It runs after the equalizer and
   before Enhance. The modules are Amplify, Fade in and out, EBU R128 normalizer, Track normalizer,
@@ -115,6 +117,10 @@
   Leveler level as a song plays.
 
 ### Fixed
+- Windows: the Convert files window no longer freezes the first time it opens. The list of formats it can write is
+  now worked out in the background a few seconds after start.
+- Windows: a conversion that fails now says why. The message for a full disk looked for a signal Windows does not have
+  and raised an error instead of showing any message.
 - Plainer wording in the Convert files window. The destination choices are Next to the original files and
   Folder, the choices for a file that already exists are Add a number, Skip and Replace, and the tips and
   messages say the same things in fewer words.

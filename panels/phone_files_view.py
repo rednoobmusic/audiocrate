@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QHB
                                QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget)
 
 import phone_files as pf
+import plat_paths
 from applog import log
 from library_widgets import Scheme, draw_glyph
 
@@ -353,9 +354,9 @@ class PhoneFilesView(QWidget):
         self._job: _Job | None = None
         self._closed = False
         self._tracks = pf.PhoneTracks()
-        self._dest = self._pick_home("Music")
+        self._dest = self._pick_music()
         self._src_dir = Path.home()
-        self._library_dir = Path.home() / "Music"
+        self._library_dir = plat_paths.music_dir()
         self._icons: dict[str, QIcon] = {}
         self._targets: list = []
         self._menu_obj: QMenu | None = None
@@ -425,8 +426,8 @@ class PhoneFilesView(QWidget):
     # small helpers
 
     @staticmethod
-    def _pick_home(sub: str) -> Path:
-        p = Path.home() / sub
+    def _pick_music() -> Path:
+        p = plat_paths.music_dir()
         return p if p.is_dir() else Path.home()
 
     def _timer(self, ms: int, fn) -> QTimer:

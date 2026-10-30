@@ -36,6 +36,9 @@ from pathlib import Path
 
 import audio_files as af
 import cli_render
+import plat_fs
+import plat_paths
+import plat_proc
 import sid_player
 from applog import log
 from artists import join_artists, split_artists
@@ -161,7 +164,8 @@ def encoders(refresh: bool = False) -> set:
             if exe:
                 try:
                     out = subprocess.run([exe, '-hide_banner', '-encoders'], capture_output=True, timeout=20,
-                                         stdin=subprocess.DEVNULL, text=True, errors='replace').stdout
+                                         stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace',
+                                         **plat_proc.popen_kwargs(group=False)).stdout
                     found = {m.group(1) for m in re.finditer(r'^\s*A[A-Z.]{5}\s+(\S+)', out, re.M)}
                 except (OSError, subprocess.SubprocessError):
                     pass
@@ -219,7 +223,8 @@ def _probe_encode(exe: str, fmt: Format) -> bool:
                 rc, _ = _run_pair(args, external_args(fmt, q, str(out)), threading.Event(), None, None, PROBE_TIMEOUT)
             else:
                 args = encode_args(exe, str(wav), str(out), fmt, q, opts, rate=pick_rate(fmt, 44100))
-                rc = subprocess.run(args, capture_output=True, timeout=PROBE_TIMEOUT, stdin=subprocess.DEVNULL).returncode
+                rc = subprocess.run(args, capture_output=True, timeout=PROBE_TIMEOUT, stdin=subprocess.DEVNULL,
+                                    **plat_proc.popen_kwargs(group=False)).returncode
             return rc == 0 and out.is_file() and out.stat().st_size > 0
     except Exception:
         return False
@@ -238,7 +243,7 @@ def _probe_all(exe: str, have: set) -> dict:
 
 
 def _cache_file() -> Path:
-    return Path.home() / '.cache' / 'audiocrate' / 'convert-formats.json'
+    return plat_paths.cache_dir() / 'convert-formats.json'
 
 
 def _remembered(key: str) -> dict | None:
@@ -270,7 +275,7 @@ def _usable(exe: str, have: set, refresh: bool) -> dict:
                 _cache_file().parent.mkdir(parents=True, exist_ok=True)
                 tmp = _cache_file().with_name('.convert-formats.%d.tmp' % os.getpid())
                 tmp.write_text(json.dumps({'key': key, 'ok': found}), encoding='utf-8')
-                os.replace(tmp, _cache_file())
+                plat_fs.replace(tmp, _cache_file())
             except OSError:
                 pass
         _works[key] = found
@@ -387,7 +392,7 @@ class Options:
 
 
 def settings_path() -> Path:
-    return Path.home() / '.config' / 'audiocrate' / 'convert.json'
+    return plat_paths.config_dir() / 'convert.json'
 
 
 def load_options(path: Path | None = None) -> Options:
@@ -405,7 +410,7 @@ def save_options(opts: Options, path: Path | None = None) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(opts.to_dict(), indent=2), encoding='utf-8')
-        os.replace(tmp, path)
+        plat_fs.replace(tmp, path)
         return True
     except OSError:
         log.warning('could not save the converter settings to %s', path)
@@ -477,7 +482,10 @@ def example(template: str, tags: dict, src: Path, ext: str, fat: bool = True) ->
 
 def fat_default(folder: Path, mountinfo: str | Path = '/proc/self/mountinfo') -> bool:
     """Whether names for this folder should work on FAT: it is on a FAT, exFAT or NTFS file system, or on a volume
-    mounted under /run/media or /media, where removable drives appear."""
+    mounted under /run/media or /media, where removable drives appear. Windows refuses the same characters on every
+    file system, so there the answer is always yes."""
+    if sys.platform == 'win32':
+        return True
     try:
         here = os.path.realpath(folder)
     except OSError:
@@ -499,7 +507,7 @@ _GUESS = {'flac': 0.62, 'alac': 0.64, 'wavpack': 0.6, 'ape': 0.55}       # share
 
 
 def ratios_path() -> Path:
-    return Path.home() / '.cache' / 'audiocrate' / 'convert-ratios.json'
+    return plat_paths.cache_dir() / 'convert-ratios.json'
 
 
 def load_ratios(path: Path | None = None) -> dict:
@@ -518,7 +526,7 @@ def save_ratios(ratios: dict, path: Path | None = None) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(ratios), encoding='utf-8')
-        os.replace(tmp, path)
+        plat_fs.replace(tmp, path)
         return True
     except OSError:
         return False
@@ -635,9 +643,10 @@ def expand(paths) -> list[Path]:
 def ffprobe_path() -> str | None:
     exe = ffmpeg_path()
     if exe:
-        cand = os.path.join(os.path.dirname(exe), 'ffprobe')
-        if os.path.isfile(cand):
-            return cand
+        for name in ('ffprobe', 'ffprobe.exe'):
+            cand = os.path.join(os.path.dirname(exe), name)
+            if os.path.isfile(cand):
+                return cand
     return shutil.which('ffprobe')
 
 
@@ -650,7 +659,7 @@ def probe(path, timeout: float = 30) -> dict | None:
     try:
         r = subprocess.run([exe, '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams',
                             'file:' + os.path.abspath(path)], capture_output=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, **plat_proc.popen_kwargs(group=False))
         data = json.loads(r.stdout.decode('utf-8', 'replace')) if r.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -729,7 +738,7 @@ def _gme_info(path: Path, track: int = 0) -> dict:
     if vp is None:
         return {}
     emu = ctypes.c_void_p()
-    if vp._lib.gme_open_file(os.fsencode(path), ctypes.byref(emu), _GME_RATE):
+    if vp.gme_open(vp._lib, os.fsencode(path), emu, _GME_RATE):
         return {}
     out = {}
     try:
@@ -752,7 +761,7 @@ def _gme_titles(path: Path) -> list[str]:
     if vp is None:
         return []
     emu = ctypes.c_void_p()
-    if vp._lib.gme_open_file(os.fsencode(path), ctypes.byref(emu), _GME_RATE):
+    if vp.gme_open(vp._lib, os.fsencode(path), emu, _GME_RATE):
         return []
     try:
         n = min(int(vp._lib.gme_track_count(emu)), _MAX_SONGS)
@@ -771,12 +780,12 @@ def _gme_titles(path: Path) -> list[str]:
 
 @functools.lru_cache(maxsize=256)
 def _openmpt_count(path: str, stamp) -> int:
-    exe = shutil.which('openmpt123')
+    exe = plat_proc.which('openmpt123')
     if not exe:
         return 1
     try:
         out = subprocess.run([exe, '--info', path], capture_output=True, timeout=20, stdin=subprocess.DEVNULL,
-                             text=True, errors='replace').stdout
+                             text=True, encoding='utf-8', errors='replace', **plat_proc.popen_kwargs(group=False)).stdout
     except (OSError, subprocess.SubprocessError):
         return 1
     m = re.search(r'^Subsongs\.*:\s*(\d+)', out, re.M)
@@ -796,7 +805,7 @@ def chip_songs(path: Path) -> list[str]:
             return [''] * min(_fur_song_count(path), _MAX_SONGS)
         if ext in _GME_EXTS:
             return _gme_titles(path) or ['']
-        if ext in _OPENMPT_EXTS and shutil.which('openmpt123'):
+        if ext in _OPENMPT_EXTS and plat_proc.which('openmpt123'):
             st = path.stat()
             return [''] * _openmpt_count(str(path), (st.st_mtime_ns, st.st_size))
     except Exception:
@@ -943,7 +952,7 @@ def _render_gme(path: Path, opts: Options, cancel: threading.Event, tmp: Path):
     else:
         length = float(opts.chip_seconds)
     emu = ctypes.c_void_p()
-    if lib.gme_open_file(os.fsencode(path), ctypes.byref(emu), _GME_RATE):
+    if vp.gme_open(lib, os.fsencode(path), emu, _GME_RATE):
         return None, None
     out = tmp / 'gme.wav'
     try:
@@ -1109,7 +1118,8 @@ def _fur_song_count(path: Path) -> int:
         return n
     try:
         r = subprocess.run([sys.executable, '-c', _FUR_CHILD, str(fur_player._lib._name), str(path), '-', '1', '0'],
-                           capture_output=True, timeout=60, stdin=subprocess.DEVNULL, text=True)
+                           capture_output=True, timeout=60, stdin=subprocess.DEVNULL, text=True, encoding='utf-8',
+                           **plat_proc.popen_kwargs(group=False))
         return max(int(r.stdout.split()[-1]), 1) if r.returncode == 0 and r.stdout.split() else 1
     except (OSError, subprocess.SubprocessError, ValueError):
         return 1
@@ -1121,8 +1131,9 @@ def _render_fur_child(path: Path, opts: Options, cancel: threading.Event, tmp: P
     args = [sys.executable, '-c', _FUR_CHILD, str(fur_player._lib._name), str(path), str(out), str(max(opts.chip_loops, 1)),
             str(_song_number(opts) - 1)]
     err = tempfile.TemporaryFile()
-    p = subprocess.Popen((['nice', '-n', '10'] if shutil.which('nice') else []) + args, stdout=subprocess.DEVNULL,
-                         stderr=err, stdin=subprocess.DEVNULL, start_new_session=True)
+    p = subprocess.Popen(plat_proc.low_priority(args), stdout=subprocess.DEVNULL,
+                         stderr=err, stdin=subprocess.DEVNULL, **plat_proc.popen_kwargs(low=True))
+    plat_proc.contain(p)
     own(p)
     end = time.monotonic() + 900            # a render takes seconds, so a program that is still there after this is stuck
     try:
@@ -1131,7 +1142,7 @@ def _render_fur_child(path: Path, opts: Options, cancel: threading.Event, tmp: P
                 raise Cancelled
     finally:
         if p.poll() is None:
-            af.kill_group(p)
+            plat_proc.kill_tree(p)
             p.wait()
         own(None)
     return (str(out), _wav_seconds(out)) if p.returncode == 0 and out.exists() else (None, None)
@@ -1177,7 +1188,7 @@ def _render_fur(path: Path, opts: Options, cancel: threading.Event, tmp: Path, o
 
 def _render_openmpt(path: Path, opts: Options, cancel: threading.Event, tmp: Path):
     """One song of a tracker module that has several, rendered by openmpt123 into tmp."""
-    exe = shutil.which('openmpt123')
+    exe = plat_proc.which('openmpt123')
     if not exe:
         return None, None
     link = tmp / ('module' + path.suffix.lower())
@@ -1186,14 +1197,16 @@ def _render_openmpt(path: Path, opts: Options, cancel: threading.Event, tmp: Pat
     except OSError:
         shutil.copy2(path, link)
     p = subprocess.Popen([exe, '--render', '--output-type', 'wav', '--subsong', str(_song_number(opts) - 1), str(link)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True)
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         **plat_proc.popen_kwargs())
+    plat_proc.contain(p)
     try:
         while p.poll() is None:
             if cancel.wait(0.1):
                 raise Cancelled
     finally:
         if p.poll() is None:
-            af.kill_group(p)
+            plat_proc.kill_tree(p)
             p.wait()
     wav = Path(str(link) + '.wav')
     return (str(wav), _wav_seconds(wav) or None) if p.returncode == 0 and wav.exists() else (None, None)
@@ -1384,9 +1397,12 @@ def _run_pair(dec: list, enc: list, cancel: threading.Event, on_progress=None, o
     one that failed said). on_progress(seconds) hears how much audio has gone through. `own` is told of each process,
     so a canceller can kill them. Raises Cancelled when cancel is set."""
     derr, eerr = tempfile.TemporaryFile(), tempfile.TemporaryFile()
-    nice = ['nice', '-n', '10'] if shutil.which('nice') else []
-    pd = subprocess.Popen(nice + dec, stdout=subprocess.PIPE, stderr=derr, stdin=subprocess.DEVNULL, start_new_session=True)
-    pe = subprocess.Popen(nice + enc, stdin=subprocess.PIPE, stdout=eerr, stderr=subprocess.STDOUT, start_new_session=True)
+    pd = subprocess.Popen(plat_proc.low_priority(dec), stdout=subprocess.PIPE, stderr=derr, stdin=subprocess.DEVNULL,
+                          **plat_proc.popen_kwargs(low=True))
+    plat_proc.contain(pd)
+    pe = subprocess.Popen(plat_proc.low_priority(enc), stdin=subprocess.PIPE, stdout=eerr, stderr=subprocess.STDOUT,
+                          **plat_proc.popen_kwargs(low=True))
+    plat_proc.contain(pe)
     if own:
         own(pd)
         own(pe)
@@ -1425,7 +1441,7 @@ def _run_pair(dec: list, enc: list, cancel: threading.Event, on_progress=None, o
     finally:
         for p in (pd, pe):
             if p.poll() is None:
-                af.kill_group(p)
+                plat_proc.kill_tree(p)
                 p.wait()
         for f in (pd.stdout, pe.stdin):
             try:
@@ -1518,7 +1534,8 @@ def head_audio(path, rate: int, seconds: float = 60.0):
         try:
             r = subprocess.run([exe] + _FIRST[:-1] + ['-t', '%.3f' % seconds, '-i', 'file:' + os.path.abspath(path), '-map',
                                                       '0:a:0', '-vn', '-sn', '-dn', '-ac', '2', '-ar', str(rate), '-f', 'f32le',
-                                                      'pipe:1'], capture_output=True, timeout=180, stdin=subprocess.DEVNULL)
+                                                      'pipe:1'], capture_output=True, timeout=180, stdin=subprocess.DEVNULL,
+                               **plat_proc.popen_kwargs(group=False))
             raw = r.stdout[:len(r.stdout) // 8 * 8]
             if r.returncode == 0 and raw:
                 return np.frombuffer(raw, dtype=np.float32).reshape(-1, 2).copy()
@@ -1566,7 +1583,7 @@ def fix_id3(path: Path):
 def explain(rc: int, tail: str) -> str:
     """One plain sentence for a failed ffmpeg run."""
     t = tail.lower()
-    if rc == -signal.SIGXFSZ or 'no space left' in t or 'file too large' in t:     # the signal is a file size limit
+    if rc == -getattr(signal, 'SIGXFSZ', 0) != 0 or 'no space left' in t or 'file too large' in t:     # the signal is a file size limit
         return "There is not enough room at the destination."
     if 'permission denied' in t or 'read-only file system' in t:
         return "The destination folder cannot be written to."
@@ -1746,7 +1763,7 @@ class Converter:
                         idle.append(j)
         for j in todo:
             for p in list(j.procs):
-                af.kill_group(p)
+                plat_proc.kill_tree(p)
         for j in idle:
             self._set(j, force=True)
 
@@ -2033,9 +2050,7 @@ class Converter:
             dec = encode_args(exe, str(source), '', fmt, q, opts, **kw)
             rc, text = _run_pair(dec, external_args(fmt, q, str(out)), job.cancel_event, progress, own)
         else:
-            args = encode_args(exe, str(source), str(out), fmt, q, opts, **kw)
-            if shutil.which('nice'):
-                args = ['nice', '-n', '10'] + args
+            args = plat_proc.low_priority(encode_args(exe, str(source), str(out), fmt, q, opts, **kw))
             rc, text = af.run_ffmpeg(args, job.cancel_event, progress, own)
         if rc != 0:
             job.detail = text
@@ -2057,9 +2072,7 @@ class Converter:
         if limit:
             a += ['-t', '%.3f' % limit]
         a += ['-i', 'file:' + os.path.abspath(source), '-map', '0:a:0', '-vn', '-sn', '-dn', '-af', _SILENCE, '-f', 'null', '-']
-        if shutil.which('nice'):
-            a = ['nice', '-n', '10'] + a
-        rc, text = af.run_ffmpeg(a, job.cancel_event, None, own, keep=4 << 20)
+        rc, text = af.run_ffmpeg(plat_proc.low_priority(a), job.cancel_event, None, own, keep=4 << 20)
         if rc != 0:
             job.detail = text[-300:]
             raise ConvertError(explain(rc, text[-300:]))
@@ -2079,9 +2092,7 @@ class Converter:
             a += ['-t', '%.3f' % limit]
         a += ['-i', 'file:' + os.path.abspath(source), '-map', '0:a:0', '-vn', '-sn', '-dn', '-af',
               'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-']
-        if shutil.which('nice'):
-            a = ['nice', '-n', '10'] + a
-        rc, text = af.run_ffmpeg(a, job.cancel_event, None, own, keep=64 << 10)
+        rc, text = af.run_ffmpeg(plat_proc.low_priority(a), job.cancel_event, None, own, keep=64 << 10)
         if rc != 0:
             job.detail = text[-300:]
             raise ConvertError(explain(rc, text[-300:]))
@@ -2137,7 +2148,7 @@ class Converter:
                 raise Skip("Another file in the list has the same name.")
             if exists and not clash:
                 there = _ident(dest)
-                own = there is not None and there == _ident(src)
+                own = plat_fs.same_file(dest, src)
                 if opts.exists == 'skip':
                     raise Skip("That is the original file." if own else "A file with this name already exists.")
                 if opts.exists == 'overwrite':
@@ -2241,7 +2252,7 @@ class Converter:
             with self._lock:
                 dest = dest.with_name(unique_name(dest.parent, dest.name, self._taken.get(dest.parent), job.fat))
                 job.dest = dest
-        os.replace(part, dest)
+        plat_fs.replace(part, dest)
 
     def _run_piped(self, job, exe, source, out, fmt, q, opts, kw, processor, progress, own, stage):
         """Decode at the stage's rate, run the blocks through the player's chain, encode. Processes and a pump in this
@@ -2252,15 +2263,18 @@ class Converter:
         ext = external_args(fmt, q, str(out)) if fmt.external else None
         enc = encode_args(exe, '', '' if ext else str(out), fmt, q, replace(opts, trim=False), piped=True, original=str(source),
                           pipe_rate=stage, **{**kw, 'start': 0.0})
-        nice = ['nice', '-n', '10'] if shutil.which('nice') else []
         derr, eerr, merr = tempfile.TemporaryFile(), tempfile.TemporaryFile(), tempfile.TemporaryFile()
-        pd = subprocess.Popen(nice + dec, stdout=subprocess.PIPE, stderr=derr, stdin=subprocess.DEVNULL,
-                              start_new_session=True)
-        pe = subprocess.Popen(nice + enc, stdout=subprocess.PIPE, stderr=eerr, stdin=subprocess.PIPE, text=False,
-                              start_new_session=True)
+        pd = subprocess.Popen(plat_proc.low_priority(dec), stdout=subprocess.PIPE, stderr=derr, stdin=subprocess.DEVNULL,
+                              **plat_proc.popen_kwargs(low=True))
+        plat_proc.contain(pd)
+        pe = subprocess.Popen(plat_proc.low_priority(enc), stdout=subprocess.PIPE, stderr=eerr, stdin=subprocess.PIPE, text=False,
+                              **plat_proc.popen_kwargs(low=True))
+        plat_proc.contain(pe)
         pm = None
         if ext:
-            pm = subprocess.Popen(nice + ext, stdin=pe.stdout, stdout=merr, stderr=subprocess.STDOUT, start_new_session=True)
+            pm = subprocess.Popen(plat_proc.low_priority(ext), stdin=pe.stdout, stdout=merr, stderr=subprocess.STDOUT,
+                                  **plat_proc.popen_kwargs(low=True))
+            plat_proc.contain(pm)
             pe.stdout.close()
         own(pd)
         own(pe)
@@ -2313,7 +2327,7 @@ class Converter:
         finally:
             for p in (pd, pe, pm):
                 if p is not None and p.poll() is None:
-                    af.kill_group(p)
+                    plat_proc.kill_tree(p)
                     p.wait()
             for f in (pd.stdout, pe.stdin):
                 try:
@@ -2332,17 +2346,11 @@ class Converter:
 
 # temp files
 
-def _ident(path):
-    """(device, inode) of what a path leads to, or None: two paths are one file when these match."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return st.st_dev, st.st_ino
+_ident = plat_fs.file_id            # what a path leads to, or None: two paths are one file when these match
 
 
 def tmp_root() -> Path:
-    return Path.home() / '.cache' / 'audiocrate' / 'convert-tmp'
+    return plat_paths.cache_dir() / 'convert-tmp'
 
 
 def sweep_tmp():

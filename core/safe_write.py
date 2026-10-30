@@ -1,6 +1,7 @@
 """Writing the app's own files so that a full disk or a crash cannot cost the copy that is already there."""
-import os
 from pathlib import Path
+
+import plat_fs
 
 
 def write_text(path, text: str) -> None:
@@ -11,7 +12,7 @@ def write_text(path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     try:
         tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        plat_fs.replace(tmp, path)
     except BaseException:
         try:
             tmp.unlink()

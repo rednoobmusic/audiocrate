@@ -24,6 +24,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 
+import plat_proc
 from applog import log
 from online_service import BROWSERS
 
@@ -159,8 +160,8 @@ def _resolve(ident: str, desktop: str) -> Browser:
 
 def _output(*cmd: str) -> str:
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=4,
-                              stdin=subprocess.DEVNULL, check=False)
+        done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=4,
+                              stdin=subprocess.DEVNULL, check=False, **plat_proc.popen_kwargs(group=False))
     except (OSError, subprocess.SubprocessError, ValueError):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""

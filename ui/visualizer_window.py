@@ -12,13 +12,16 @@ Live mono PCM is pulled from the same analyzer that drives the spectrum/oscillos
 from __future__ import annotations
 
 import os
+import sys
 import time
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QSurfaceFormat, QFont
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PySide6.QtOpenGL import QOpenGLWindow
 
+import gl_probe
+import plat_paths
 import power
 import projectm_engine as pe
 from applog import log
@@ -26,13 +29,32 @@ from applog import log
 _PCM_SAMPLES = 512                  # mono samples fed per frame
 _RESIZE_SETTLE = 0.15               # seconds the window must hold its size before projectM is told
 _BLEND = 3.2                        # a soft cut lasts 3 s (see ProjectMEngine); a resize waits it out
+_REPORT_EVERY = 30.0                # seconds between the frame rate lines in the log (Windows only, see _guarded)
 _IC_PREV    = "\U000f0141"          # chevron-left
 _IC_NEXT    = "\U000f0142"          # chevron-right
 _IC_SHUFFLE = "\U000f049d"          # shuffle
 _IC_LOCK    = "\U000f033e"          # lock
 
 
+def _surface_format() -> QSurfaceFormat:
+    fmt = QSurfaceFormat()
+    fmt.setVersion(3, 3)
+    fmt.setProfile(QSurfaceFormat.CoreProfile)
+    fmt.setDepthBufferSize(24)
+    fmt.setStencilBufferSize(8)
+    fmt.setSwapInterval(1)
+    return fmt
+
+
+def _guarded() -> bool:
+    """Windows checks that OpenGL 3.3 and projectM are there before the view is shown, and steps aside when they are not:
+    a computer there may have nothing but the basic display driver. Linux leaves a view that cannot draw as it always did."""
+    return sys.platform == "win32"
+
+
 class _GLViz(QOpenGLWindow):
+    failed = Signal(str)            # the engine could not be made (Windows only, see _guarded)
+
     def __init__(self, pcm_callback):
         super().__init__()
         self._pcm = pcm_callback
@@ -48,19 +70,17 @@ class _GLViz(QOpenGLWindow):
         self._last_change = 0.0     # when the preset last changed, to know if a blend may be running
         self._last_pos = -1
 
-        fmt = QSurfaceFormat()
-        fmt.setVersion(3, 3)
-        fmt.setProfile(QSurfaceFormat.CoreProfile)
-        fmt.setDepthBufferSize(24)
-        fmt.setStencilBufferSize(8)
-        fmt.setSwapInterval(1)
-        self.setFormat(fmt)
+        self.setFormat(_surface_format())
 
         self._timer = QTimer(self)
         self._timer.setInterval(16)   # ~60 fps, slower when a frame costs more (see _paced)
         self._timer.timeout.connect(self.update)
         self._cost = 0.0
         self._t0 = 0.0
+        self._frames = 0                # frames since the last line in the log, and when that was, and the slowest gap
+        self._reported = 0.0
+        self._last_frame = 0.0
+        self._slowest = 0.0
         self.frameSwapped.connect(self._paced)
 
     def _fb_size(self):
@@ -80,6 +100,8 @@ class _GLViz(QOpenGLWindow):
             self._timer.start()
         except Exception as e:
             log.warning("projectM init failed: %s", e)
+            if _guarded():
+                self.failed.emit(str(e))
 
     def _size_ready(self) -> bool:
         """projectM is told the window's size only once it has held still, never on every step of a
@@ -138,6 +160,8 @@ class _GLViz(QOpenGLWindow):
         from the start of the paint to the end of the swap (a driver that spins waiting for
         the display burns it there), so the scope, the restyle after a song change and every
         click are not queued behind a visualizer that wants the whole thread."""
+        if _guarded():
+            self._report_rate()
         c = time.thread_time() - self._t0
         if not 0 < c < 0.5:
             return
@@ -145,6 +169,23 @@ class _GLViz(QOpenGLWindow):
         ms = max(power.frame_ms(16), min(100, int(self._cost * 3000)))
         if ms != self._timer.interval():
             self._timer.setInterval(ms)
+
+    def _report_rate(self):
+        """How fast the view really draws, in the log, so a long run on a real machine can be read afterwards."""
+        now = time.perf_counter()
+        if self._last_frame:
+            self._slowest = max(self._slowest, now - self._last_frame)
+        self._last_frame = now
+        self._frames += 1
+        if not self._reported:
+            self._reported = now
+        elif now - self._reported >= _REPORT_EVERY:
+            log.info("Milkdrop: %.1f frames a second over %.0f s, slowest gap %.0f ms",
+                     self._frames / (now - self._reported), now - self._reported, self._slowest * 1000)
+            self._frames, self._reported, self._slowest = 0, now, 0.0
+
+    def _forget_rate(self):
+        self._frames, self._reported, self._last_frame, self._slowest = 0, 0.0, 0.0, 0.0
 
     # controls (forwarded from the panel)
     def next_preset(self):
@@ -184,6 +225,7 @@ class _GLViz(QOpenGLWindow):
             self._timer.start()
         elif not run and self._timer.isActive():
             self._timer.stop()
+            self._forget_rate()
 
     def shutdown(self):
         self._timer.stop()
@@ -199,15 +241,22 @@ class _GLViz(QOpenGLWindow):
 class VisualizerPanel(QWidget):
     """Dockable Milkdrop panel: a projectM view + a butterchurn-style control bar."""
 
+    unavailable = Signal(str)       # Milkdrop cannot run here; the text says why (Windows only, see _guarded)
+
     def __init__(self, analyzer, player, parent=None):
         super().__init__(parent)
         self._analyzer = analyzer
         self._player   = player
         self._pending_preset = ""
+        self._probed = False
+        self.unavailable_reason = ""
 
         self._gl = _GLViz(self._pull_pcm)
+        self._gl.failed.connect(self._on_failed, Qt.QueuedConnection)    # not while the view is inside its own paint
         self._container = QWidget.createWindowContainer(self._gl, self)
         self._container.setFocusPolicy(Qt.StrongFocus)
+        if _guarded():
+            self._container.hide()          # shown by _check_gl once there is a context to draw with
 
         bar = self._build_controls()
 
@@ -302,6 +351,8 @@ class VisualizerPanel(QWidget):
 
     def _refresh_name(self):
         name = self._gl.preset_name()
+        if not name and _guarded() and self._gl._engine is not None and not self._gl._engine.preset_count:
+            name = "No presets found. Put .milk files in %s" % (plat_paths.data_dir() / "presets")
         if name:
             fm = self._name.fontMetrics()
             self._name.setText(fm.elidedText(name, Qt.ElideRight, max(40, self._name.width())))
@@ -310,7 +361,7 @@ class VisualizerPanel(QWidget):
     # Render only while on-screen and the app is focused: projectM is the heaviest
     # thing in the app, so it stops when hidden, tabbed away, minimized or unfocused.
     def _sync_running(self):
-        run = self.isVisible() and not self._suspended
+        run = self.isVisible() and not self._suspended and not self.unavailable_reason
         self._gl.set_running(run)
         self._name_timer.start() if run else self._name_timer.stop()
 
@@ -319,7 +370,46 @@ class VisualizerPanel(QWidget):
         self._suspended = bool(suspended)
         self._sync_running()
 
+    def _check_gl(self):
+        """Before the view is first shown: projectM's libraries and a core context of OpenGL 3.3. A window that is shown
+        without one is exposed all the same, and Qt then fails inside its own paint, so the view stays hidden until this
+        has answered."""
+        self._probed = True
+        if not pe.available():
+            self._give_up("Milkdrop is off: projectM is not installed (projectM-4.dll and projectM-4-playlist.dll belong "
+                          "in the libs folder of the program).")
+            return
+        ok, detail = gl_probe.probe(_surface_format())
+        if ok:
+            log.info("Milkdrop: %s", detail)
+            self._container.show()
+        else:
+            self._give_up("Milkdrop is off: %s." % detail)
+
+    def _on_failed(self, why: str):
+        self._give_up("Milkdrop is off: it could not start (%s)." % why)
+
+    def _give_up(self, text: str):
+        if self.unavailable_reason:
+            return
+        self.unavailable_reason = text
+        log.warning("%s", text)
+        self._gl.set_running(False)
+        self._container.hide()
+        for w in (self._b_prev, self._b_next, self._b_shuffle, self._b_lock, self._name):
+            w.hide()
+        note = QLabel(text + " The other visualizers still work.")
+        note.setWordWrap(True)
+        note.setAlignment(Qt.AlignCenter)
+        note.setMargin(12)
+        note.setStyleSheet("color: rgba(255,255,255,0.45);")
+        self.layout().insertWidget(0, note, 1)
+        self._sync_running()
+        self.unavailable.emit(text)
+
     def showEvent(self, e):
+        if _guarded() and not self._probed:
+            self._check_gl()
         super().showEvent(e)
         self._sync_running()
 

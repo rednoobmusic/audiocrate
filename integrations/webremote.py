@@ -38,16 +38,18 @@ from urllib.parse import urlparse, parse_qs
 
 from PySide6.QtCore import QObject, QTimer, Signal, Qt
 
+import plat_fs
+import plat_paths
 from applog import log
 from artists import options as artist_options, split_artists
 from library_cache import _SCHEMA_VERSION as _DB_VERSION
 from player import Player, PlayMode, extract_art
 
-_CFG_DIR   = Path.home() / ".config" / "audiocrate"
+_CFG_DIR   = plat_paths.config_dir()
 _CFG_FILE  = _CFG_DIR / "webremote.json"
 _DB_PATH   = _CFG_DIR / "library.db"
 _WEBUI_DIR = Path(__file__).resolve().parent / "webui"
-_WAVE_DIR  = Path.home() / ".cache" / "audiocrate" / "webwaveform"
+_WAVE_DIR  = plat_paths.cache_dir() / "webwaveform"
 
 WAVE_POINTS = 240              # bars in the phone's waveform seek bar
 
@@ -118,7 +120,7 @@ def save_config(cfg: dict):
         tmp = _CFG_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(out, indent=2), encoding="utf-8")
         os.chmod(tmp, 0o600)
-        tmp.replace(_CFG_FILE)
+        plat_fs.replace(tmp, _CFG_FILE)
     except Exception:
         log.exception("failed to save %s", _CFG_FILE)
 
@@ -571,7 +573,7 @@ class WebRemote(QObject):
             key = _art_key(path)
         cache = _WAVE_DIR / f"{key}-{n}.json"
         try:
-            return json.loads(cache.read_text())
+            return json.loads(cache.read_text(encoding="utf-8"))
         except Exception:
             pass
 
@@ -588,8 +590,8 @@ class WebRemote(QObject):
         try:
             _WAVE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = cache.with_suffix(".tmp")
-            tmp.write_text(json.dumps(peaks))
-            tmp.replace(cache)              # same directory, so the rename is atomic
+            tmp.write_text(json.dumps(peaks), encoding="utf-8")
+            plat_fs.replace(tmp, cache)     # same directory, so the rename is atomic
         except Exception:
             log.exception("could not cache waveform to %s", cache)
         return peaks

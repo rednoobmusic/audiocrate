@@ -26,7 +26,13 @@ from ctypes import (POINTER, byref, c_char_p, c_double, c_float, c_int, c_int16,
 from dataclasses import dataclass, field
 from pathlib import Path
 
-BACKUP_ROOT = Path.home() / ".config" / "audiocrate" / "devices" / "backups"
+if __name__ == '__main__':        # the helper is started as a script, so core/ is not on the path yet
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'core'))
+import plat_fs
+import plat_paths
+import plat_proc
+
+BACKUP_ROOT = plat_paths.config_dir() / "devices" / "backups"
 KEEP_BACKUPS = 3
 MAX_DB = 160 << 20          # bytes: the biggest iTunesDB read, compressed or not (100,000 songs need about 100 MB)
 MAX_SYSINFO = 1 << 20       # bytes: SysInfo and SysInfoExtended are a few KB, a bigger one is damaged
@@ -716,11 +722,7 @@ def _copy_checked(src: Path, dst: Path):
     shutil.copyfile(src, dst)
     db = src.name in _DB_FILES
     if db:
-        fd = os.open(dst, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        plat_fs.sync_file(dst)
     if dst.stat().st_size != src.stat().st_size or (db and _digest(dst) != _digest(src)):
         raise OSError(errno.EIO, "the copy of %s did not match the original" % src.name)
 
@@ -748,7 +750,7 @@ def make_backup(info: IpodInfo, uuid: str = '', root: Path | None = None, tracks
                 tracks = 0
         manifest = {'id': stamp, 'tracks': tracks, 'model': info.name,
                     'files': [str(p.relative_to(info.mount)) for p in files]}
-        (dest / 'backup.json').write_text(json.dumps(manifest))
+        (dest / 'backup.json').write_text(json.dumps(manifest), encoding='utf-8')
     except OSError as e:
         shutil.rmtree(dest, ignore_errors=True)
         for f in on_ipod:
@@ -775,7 +777,7 @@ def list_backups(info: IpodInfo, uuid: str = '', root: Path | None = None) -> li
     host = Path(root or BACKUP_ROOT) / _key(info, uuid)
     for f in (host.glob('*/backup.json') if host.is_dir() else ()):
         try:
-            m = json.loads(f.read_text())
+            m = json.loads(f.read_text(encoding='utf-8'))
             found[m['id']] = {'id': m['id'], 'host': True, 'ipod': False, 'files': len(m['files']),
                               'tracks': m.get('tracks', 0)}
         except (OSError, ValueError, KeyError):
@@ -802,7 +804,7 @@ def restore_backup(info: IpodInfo, stamp: str, uuid: str = '', root: Path | None
     it = _ci(info.control, 'iTunes')
     try:
         if (host / 'backup.json').is_file():
-            files = json.loads((host / 'backup.json').read_text())['files']
+            files = json.loads((host / 'backup.json').read_text(encoding='utf-8'))['files']
             pairs = [(host / rel, info.mount / rel) for rel in files]
         else:
             copies = [(it / ('%s.audiocrate-backup-%s' % (n, stamp)), it / n) for n in _DB_FILES] if it else []
@@ -813,8 +815,8 @@ def restore_backup(info: IpodInfo, stamp: str, uuid: str = '', root: Path | None
             dst.parent.mkdir(parents=True, exist_ok=True)
             tmp = dst.with_name(dst.name + '.audiocrate-tmp')
             shutil.copyfile(src, tmp)
-            os.replace(tmp, dst)
-        os.sync()
+            plat_fs.replace(tmp, dst)
+        plat_fs.flush_volume(info.mount)
         info.db = db_name(info.control)
         if info.db:
             read_library(info.mount)
@@ -851,7 +853,8 @@ def gpod_status() -> dict:
             if cmd is None:
                 _status = {'ok': False, 'message': _NO_HELPER}
                 return _status
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=30, stdin=subprocess.DEVNULL,
+                               **plat_proc.popen_kwargs(group=False))
             _status = json.loads(r.stdout.strip().splitlines()[-1])
             _merge_table(_status.pop('table', []))
         except Exception as e:
@@ -922,8 +925,8 @@ class IpodSession:
             raise IpodError(_NO_HELPER)
         try:
             self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                          stdout=subprocess.PIPE, stderr=self._log, text=True, bufsize=1,
-                                          start_new_session=True)
+                                          stdout=subprocess.PIPE, stderr=self._log, text=True, encoding='utf-8', bufsize=1,
+                                          **plat_proc.popen_kwargs())
         except OSError as e:
             raise IpodError("The iPod helper could not start (%s)." % e.strerror)
         guid = self.info.guid if self.info.guid_from == 'usb serial' else ''
@@ -1319,7 +1322,7 @@ class _Helper:
 
     def commit(self, m):
         self.g.write(self.db)
-        os.sync()
+        plat_fs.flush_volume(self.mount)
         self.g.lib.itdb_free(self.db)
         self.db = None
 
@@ -1330,7 +1333,7 @@ def main(argv=None) -> int:
     libgpod prints to stdout now and then, so the real stdout is moved aside and fd 1 points at stderr."""
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = argv[0] if argv else ''
-    out = os.fdopen(os.dup(1), 'w', buffering=1)
+    out = os.fdopen(os.dup(1), 'w', encoding='utf-8', buffering=1)
     os.dup2(2, 1)
 
     def send(**ev):

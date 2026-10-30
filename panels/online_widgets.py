@@ -30,6 +30,7 @@ from PySide6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QGuiApplication, 
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QListView, QMenu, QSizePolicy, QStyle, QStyledItemDelegate, QToolTip,
                                QVBoxLayout, QWidget)
 
+import plat_fs
 from library_views import PAD, _Base, _fill_row, _Fonts, fmt_duration
 from library_widgets import PillButton, Scheme, _Button, draw_glyph, mix, scaled_font
 from online_channel import can_open_channel
@@ -497,7 +498,7 @@ class ThumbLoader(QObject):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if img.save(str(tmp), "JPG", 85):
-                os.replace(tmp, path)
+                plat_fs.replace(tmp, path)
         except OSError:
             pass
         finally:

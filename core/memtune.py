@@ -88,20 +88,36 @@ def early() -> None:
         m(_M_MMAP_THRESHOLD, _MMAP_THRESHOLD)
         m(_M_TRIM_THRESHOLD, _TRIM_THRESHOLD)
         m(_M_ARENA_MAX, _ARENA_MAX)
-    except (AttributeError, OSError):
+    except (AttributeError, OSError, TypeError):        # TypeError: Windows has no CDLL(None)
         pass
+
+
+def _empty_working_set() -> bool:
+    """Windows: move the pages this process holds but is not using to the standby list, which the system gives to
+    another program if it needs them and the process gets back with no disk read if it touches them first. What the
+    imports left behind (the startup code of Qt, numpy, scipy) is then not counted as the program's memory."""
+    try:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel.SetProcessWorkingSetSize.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+        return bool(kernel.SetProcessWorkingSetSize(kernel.GetCurrentProcess(), ctypes.c_size_t(-1).value, ctypes.c_size_t(-1).value))
+    except (AttributeError, OSError):
+        return False
 
 
 def trim(force: bool = False) -> bool:
     """Gives free heap pages back to the system (malloc_trim). Skipped when called again within _MIN_GAP seconds, unless
-    forced. True when it ran."""
+    forced. True when it ran. Windows has no malloc_trim: it empties the working set, which is done only when forced (once,
+    after start-up), because pages needed again a moment later cost the feed thread a soft fault each."""
     global _last_trim
     now = time.monotonic()
     if not force and now - _last_trim < _MIN_GAP:
         return False
     _last_trim = now
+    if os.name == "nt":
+        return _empty_working_set() if force else False
     try:
         _lib().malloc_trim(0)
-    except (AttributeError, OSError):
+    except (AttributeError, OSError, TypeError):
         return False
     return True

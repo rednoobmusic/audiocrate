@@ -10,9 +10,13 @@ current. QOpenGLWidget guarantees that inside initializeGL, paintGL and resizeGL
 from __future__ import annotations
 import ctypes
 import os
+import sys
 from ctypes.util import find_library
 
 import numpy as np
+
+import plat_native
+import plat_paths
 
 PROJECTM_MONO   = 1
 PROJECTM_STEREO = 2
@@ -21,14 +25,21 @@ _core = None
 _pl   = None
 
 
+def _open(linux_stem: str, windows_file: str):
+    """One of the two libraries, or None. The playlist library imports the core by name, so on Windows the folder they
+    lie in is added to where imports are looked for."""
+    if sys.platform == "win32":
+        return plat_native.load(None, windows_file, with_folder=True)
+    return plat_native.load(find_library(linux_stem) or f"lib{linux_stem}.so", windows_file)
+
+
 def _load():
     global _core, _pl
     if _core is not None:
         return True
-    try:
-        _core = ctypes.CDLL(find_library("projectM-4") or "libprojectM-4.so")
-        _pl   = ctypes.CDLL(find_library("projectM-4-playlist") or "libprojectM-4-playlist.so")
-    except OSError:
+    _core = _open("projectM-4", "projectM-4.dll")
+    _pl   = _open("projectM-4-playlist", "projectM-4-playlist.dll") if _core is not None else None
+    if _core is None or _pl is None:
         _core = _pl = None
         return False
 
@@ -88,15 +99,24 @@ def version() -> str:
 
 
 def resolve_preset_dir() -> str | None:
-    """First existing preset directory with .milk files. The user config dir wins, so
-    the site's presets (copied there, kept out of the release) beat the system pack."""
+    """First existing preset directory with .milk files. The user's own folder (the config dir on Linux, the data dir
+    on Windows) wins, so the site's presets (copied there, kept out of the release) beat the system pack."""
     here = os.path.dirname(os.path.abspath(__file__))
-    cands = [
-        os.path.expanduser("~/.config/audiocrate/presets"),
-        os.path.join(here, "..", "_presets_site"),
-        "/usr/share/projectM/presets",
-        "/usr/share/projectM",
-    ]
+    if sys.platform == "win32":
+        # the person's own pack in the data folder, then one that travels with the program
+        cands = [
+            str(plat_paths.data_dir() / "presets"),
+            os.path.join(here, "..", "_presets_site"),
+            os.path.join(here, "..", "presets"),
+            os.path.join(here, "..", "libs", "presets"),
+        ]
+    else:
+        cands = [
+            str(plat_paths.config_dir() / "presets"),
+            os.path.join(here, "..", "_presets_site"),
+            "/usr/share/projectM/presets",
+            "/usr/share/projectM",
+        ]
     for d in cands:
         try:
             if os.path.isdir(d) and any(f.endswith(".milk") for f in os.listdir(d)):

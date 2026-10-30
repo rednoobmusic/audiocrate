@@ -18,10 +18,10 @@ off, or quitting, puts them back as /etc/ene-rgb.conf and OpenRGB had them.
 from __future__ import annotations
 
 import colorsys
-import fcntl
 import glob
 import math
 import os
+import sys
 import select
 import shutil
 import socket
@@ -33,6 +33,8 @@ import time
 import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QColor
+
+import plat_proc
 
 _ENE_IDS = ("0018:00000CF2:00005130", "0003:00000CF2:00005130")
 _ENE_STATE = "/etc/ene-rgb.conf"
@@ -63,7 +65,7 @@ class _Predator:
     def _find() -> str:
         for path in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
             try:
-                with open(os.path.join(path, "device/uevent")) as fh:
+                with open(os.path.join(path, "device/uevent"), encoding="utf-8") as fh:
                     uevent = fh.read()
             except OSError:
                 continue
@@ -83,6 +85,7 @@ class _Predator:
             self._fd = -1
 
     def _send(self, buf):
+        import fcntl            # Linux only: the controller is found through /sys, so no other platform gets here
         # HIDIOCSFEATURE(len)
         fcntl.ioctl(self._fd, (3 << 30) | (len(buf) << 16) | (ord("H") << 8) | 0x06,
                     bytearray(buf))
@@ -101,7 +104,7 @@ class _Predator:
     def restore(self):
         """Put every light back the way /etc/ene-rgb.conf has it."""
         try:
-            with open(_ENE_STATE) as fh:
+            with open(_ENE_STATE, encoding="utf-8") as fh:
                 lines = [ln.split() for ln in fh if ln.strip()]
         except OSError:
             return
@@ -266,7 +269,7 @@ class _OpenRGBLink:
         self._say("OpenRGB: starting its server")
         _OpenRGBLink._server = subprocess.Popen(
             [exe, *self._SERVER_ARGS, "--server-host", self._addr[0], "--server-port", str(self._addr[1])],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **plat_proc.popen_kwargs(group=False))
 
     def _count(self) -> int:
         self._send(0, _ORGB_COUNT)
@@ -595,7 +598,7 @@ class RgbSync(QObject):
         me, names = os.getpid(), {"sense_ui.py", "rgb_ui.py", "ene_rgb.py", "ene-rgb"}
         for path in glob.glob("/proc/[0-9]*/cmdline"):
             try:
-                if int(path.split("/")[2]) == me:
+                if int(os.path.basename(os.path.dirname(path))) == me:
                     continue
                 with open(path, "rb") as fh:
                     args = fh.read().split(b"\0")
@@ -607,7 +610,8 @@ class RgbSync(QObject):
 
     def _run(self):
         cfg = dict(self._cfg)
-        pred = _Predator() if (cfg["keyboard"] or cfg["emblem"] or cfg["mode_led"]) else None
+        # the Predator controller is a Linux hidraw device; nothing else has one to open
+        pred = _Predator() if (cfg["keyboard"] or cfg["emblem"] or cfg["mode_led"]) and sys.platform.startswith("linux") else None
         sent: dict = {}              # light -> (colour, when it was last sent)
         next_scan = 0.0
         try:

@@ -26,6 +26,8 @@ from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices, QAudio
 from dsp_base import Context
 from dsp_chain import Enhancer, high_ratio, ParametricEQ
 from dsp_fx_loudness import _Ramp, measure_level, normalizer_gain
+import plat_audio
+import plat_proc
 
 _FS = 44100                     # engine sample rate; set to the output device's rate at startup
 _CH = 2
@@ -33,7 +35,6 @@ _ENV_BLOCK = 2048        # frames per block in envelope()
 _ENV_MAX_BLOCKS = 400     # most new blocks one envelope() call takes on (about 18 s of audio, a few ms)
 _FRAME_BYTES = _CH * 4          # float32 stereo
 _MAX_BLOCK = 4096               # frames per feed write
-_RT_PRIO = 60                   # SCHED_FIFO priority of the audio thread (PipeWire's own thread is 83)
 _SINK_MS = 700                  # capacity asked of the sink
 _FILL_MS = 250                  # audio kept queued in it normally, which also bounds how late an EQ or volume change is heard
 _FILL_STRESSED_MS = 600         # and while the feed thread is being delayed (busy machine, stalls elsewhere in the app)
@@ -141,19 +142,6 @@ def _duration_ms(path: Path) -> int:
     return 0
 
 
-def _go_realtime() -> bool:
-    """SCHED_FIFO for the calling thread, so a busy machine cannot keep it off the
-    CPU while the sink runs dry. Qt asks for its highest priority when a thread
-    starts, which is above the usual rtprio limit (98 for the audio group), so
-    that request fails and the thread stays an ordinary one; this asks for one
-    the limit allows. Returns False where real-time scheduling is not permitted."""
-    try:
-        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(_RT_PRIO))
-    except (AttributeError, OSError):
-        return False
-    return True
-
-
 class _AudioFeedWorker(QObject):
     """Owns the QAudioSink and the 10 ms feed timer on a dedicated audio thread.
 
@@ -199,8 +187,9 @@ class _AudioFeedWorker(QObject):
         self._timer.setTimerType(Qt.PreciseTimer)
         self._timer.timeout.connect(self._tick)
         from applog import log
-        if _go_realtime():
-            log.info("audio thread: real-time (SCHED_FIFO %d)", _RT_PRIO)
+        how = plat_audio.go_realtime()
+        if how:
+            log.info("audio thread: %s", how)
         else:
             log.info("audio thread: normal priority (real-time scheduling not permitted)")
 
@@ -691,7 +680,7 @@ class DspEngine(QObject):
             cmd = [exe, "-i", str(path),
                    "-f", "f32le", "-ar", str(_FS), "-ac", str(_CH), "-vn", "-"]
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **plat_proc.popen_kwargs(group=False),
             )
             self._proc = proc
             leftover = b""
@@ -1463,7 +1452,7 @@ class DspEngine(QObject):
             dur_ms = _duration_ms(path)
             proc = subprocess.Popen(
                 [exe, "-i", str(path), "-f", "f32le", "-ar", str(_FS), "-ac", str(_CH), "-vn", "-"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **plat_proc.popen_kwargs(group=False))
             self._next_proc = proc
             if gen != self._next_gen:
                 proc.kill()                  # superseded while it was starting

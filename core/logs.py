@@ -15,9 +15,11 @@ import os
 import signal
 import sys
 import time
-from pathlib import Path
 
-LOG_DIR   = Path.home() / ".config" / "audiocrate"
+import plat_fs
+import plat_paths
+
+LOG_DIR   = plat_paths.config_dir()
 CRASH_LOG = LOG_DIR / "crash.log"
 
 # The log file belongs to applog, which rotates it. This module adds what applog
@@ -166,10 +168,11 @@ def setup(level: str | None = None) -> logging.Logger:
         if isinstance(h, logging.StreamHandler) and not isinstance(
                 h, logging.FileHandler):
             root.removeHandler(h)
-    console = logging.StreamHandler(sys.stderr)
-    console.setLevel(lvl)
-    console.setFormatter(_Formatter(_colour_ok(sys.stderr)))
-    root.addHandler(console)
+    if sys.stderr is not None:              # a windowed build has none
+        console = logging.StreamHandler(sys.stderr)
+        console.setLevel(lvl)
+        console.setFormatter(_Formatter(_colour_ok(sys.stderr)))
+        root.addHandler(console)
 
     # faulthandler takes one destination, not several, so the choice is between
     # the terminal and a file. A terminal gets it directly, since that is where
@@ -184,15 +187,16 @@ def setup(level: str | None = None) -> logging.Logger:
                 f"\n=== run started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
         except OSError:
             crash_file = None
-    faulthandler.enable(file=crash_file or sys.stderr, all_threads=True)
+    crash_to = crash_file or sys.stderr             # None in a windowed build whose crash file could not be opened
+    if crash_to is not None:
+        faulthandler.enable(file=crash_to, all_threads=True)
 
     # SIGUSR1 dumps every thread without killing anything, which is what you
     # want when it has not crashed but has stopped responding. diag.install()
     # takes this over and writes numbered files next to a state snapshot.
-    if hasattr(signal, "SIGUSR1"):
+    if crash_to is not None and hasattr(signal, "SIGUSR1"):
         try:
-            faulthandler.register(signal.SIGUSR1,
-                                  file=crash_file or sys.stderr, all_threads=True)
+            faulthandler.register(signal.SIGUSR1, file=crash_to, all_threads=True)
         except (OSError, ValueError):
             pass
 
@@ -211,17 +215,4 @@ def get(name: str) -> logging.Logger:
     return logging.getLogger(f"{_ROOT_NAME}.{name}")
 
 
-def rss_mb() -> float:
-    """Resident size in MB, or 0.0 where it cannot be read."""
-    try:
-        with open("/proc/self/status", encoding="ascii") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) / 1024.0
-    except (OSError, ValueError):
-        pass
-    try:
-        import resource
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
-    except Exception:
-        return 0.0
+rss_mb = plat_fs.rss_mb         # dsp_engine asks for the program's size here

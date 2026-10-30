@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import sys
 import safe_write
 from pathlib import Path
 
@@ -17,8 +18,9 @@ from PySide6.QtMultimedia import QMediaDevices
 from artists import DEFAULT_EXCEPTIONS, configure as configure_artists
 from player import device_key
 import anim
+import plat_paths
 
-_CFG_FILE = Path.home() / ".config" / "audiocrate" / "settings.json"
+_CFG_FILE = plat_paths.config_dir() / "settings.json"
 
 # Blank by default: Discord Rich Presence is opt-in, and each user supplies their
 # own Discord application ID and art base URL in Settings.
@@ -150,7 +152,7 @@ def _section(form, text):
 
 
 def _hint(text):
-    lbl = QLabel(text)
+    lbl = QLabel(plat_paths.breakable(text))
     lbl.setObjectName("settings_hint")
     lbl.setWordWrap(True)
     lbl.setForegroundRole(QPalette.PlaceholderText)   # dim under the system look too
@@ -413,10 +415,11 @@ class SettingsWidget(QWidget):
         self._keep_open_chk = QCheckBox("Keep the output open")
         self._keep_open_chk.setChecked(self._cfg.get("keep_output_open", False))
         self._keep_open_chk.toggled.connect(self._apply_keep_output_open)
-        form.addRow(_check(self._keep_open_chk,
-            "Leaves AudioCrate's output in the sound server when playback stops, pauses, skips or seeks, so what "
-            "you wire to it in a patchbay such as Helvum stays wired. It opens at once and stays until you quit. "
-            "A song you stop or skip keeps playing for a moment, because its queued sound cannot be thrown away."))
+        if sys.platform != "win32":          # a patchbay is a Linux thing; Windows has nothing wired to a stream
+            form.addRow(_check(self._keep_open_chk,
+                "Leaves AudioCrate's output in the sound server when playback stops, pauses, skips or seeks, so what "
+                "you wire to it in a patchbay such as Helvum stays wired. It opens at once and stays until you quit. "
+                "A song you stop or skip keeps playing for a moment, because its queued sound cannot be thrown away."))
 
     def _sec_stats(self, form):
         _section(form, "Listening stats")
@@ -426,7 +429,7 @@ class SettingsWidget(QWidget):
         self._stats_enable.toggled.connect(self._apply_play_stats)
         form.addRow(_check(self._stats_enable,
             "Tracks most-played songs/artists and total listening time, entirely "
-            "locally (~/.config/audiocrate/play_stats.json). Nothing is ever "
+            f"locally ({plat_paths.shown(plat_paths.config_dir() / 'play_stats.json')}). Nothing is ever "
             "sent anywhere. A track counts as \"played\" the same way scrobbling "
             "counts it: 50% listened (or 4 minutes), whichever is sooner."))
 
@@ -849,7 +852,7 @@ class SettingsWidget(QWidget):
         self._debug_logs_chk = QCheckBox("Write detailed logs")
         self._debug_logs_chk.setChecked(self._cfg.get("debug_logs", False))
         self._debug_logs_chk.toggled.connect(self._apply_debug_logs)
-        form.addRow(_check(self._debug_logs_chk, "Adds debug lines to the log in ~/.config/audiocrate. It applies at once. "
+        form.addRow(_check(self._debug_logs_chk, f"Adds debug lines to the log in {plat_paths.shown(plat_paths.config_dir())}. It applies at once. "
                            "Help, Diagnostics shows the log and can save a report."))
 
     def _apply_debug_logs(self, on: bool):
@@ -864,9 +867,11 @@ class SettingsWidget(QWidget):
 
         self._rgb_enabled = QCheckBox("Enable lighting")
         self._rgb_enabled.setChecked(c["rgb_enabled"])
+        predator = sys.platform.startswith("linux")      # the keyboard, emblem and mode LED are an Acer Predator controller, read through Linux
         form.addRow(_check(self._rgb_enabled,
-            "Lights the Predator keyboard, lid emblem and mode LED, and any OpenRGB "
-            "device, from the album art colour and the spectrum."))
+            ("Lights the Predator keyboard, lid emblem and mode LED, and any OpenRGB "
+             "device, from the album art colour and the spectrum.") if predator else
+            "Lights your OpenRGB devices from the album art colour and the spectrum."))
 
         self._rgb_style = QComboBox()
         self._rgb_style.addItems(_RGB_STYLES)
@@ -880,14 +885,12 @@ class SettingsWidget(QWidget):
         _field(form, "Update rate", _row(self._rgb_fps_sl, self._rgb_fps_lbl))
 
         self._rgb_keyboard = QCheckBox("Keyboard")
-        self._rgb_keyboard.setChecked(c["rgb_keyboard"])
-        form.addRow(self._rgb_keyboard)
         self._rgb_emblem = QCheckBox("Lid emblem")
-        self._rgb_emblem.setChecked(c["rgb_emblem"])
-        form.addRow(self._rgb_emblem)
         self._rgb_mode_led = QCheckBox("Mode LED")
-        self._rgb_mode_led.setChecked(c["rgb_mode_led"])
-        form.addRow(self._rgb_mode_led)
+        for chk, key in ((self._rgb_keyboard, "rgb_keyboard"), (self._rgb_emblem, "rgb_emblem"), (self._rgb_mode_led, "rgb_mode_led")):
+            chk.setChecked(c[key] and predator)
+            if predator:
+                form.addRow(chk)
 
         self._rgb_openrgb = QCheckBox("OpenRGB devices")
         self._rgb_openrgb.setChecked(c["rgb_openrgb"])

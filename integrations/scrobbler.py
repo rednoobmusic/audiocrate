@@ -27,10 +27,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+import plat_paths
 from player import Player
 from played_tracker import PlayedThresholdTracker
 
-_CACHE_DIR = Path.home() / ".config" / "audiocrate" / "scrobble_cache"
+_CACHE_DIR = plat_paths.config_dir() / "scrobble_cache"
 _UA = "AudioCrate/1.0"
 _TIMEOUT = 10.0
 
@@ -94,7 +95,7 @@ class _AudioScrobblerService:
 
     # session persistence
     def _session_file(self) -> Path:
-        return Path.home() / ".config" / "audiocrate" / f"scrobble_{self.name.lower()}.json"
+        return plat_paths.config_dir() / f"scrobble_{self.name.lower()}.json"
 
     def save_session(self):
         try:

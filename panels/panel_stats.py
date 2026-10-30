@@ -284,7 +284,7 @@ class _HistoryChart(QWidget):
 class StatsWidget(QWidget):
     """Top tracks, top artists, total time and an over-time chart per artist or track.
 
-    Reads PlayStatsTracker, which keeps everything in a local JSON file under ~/.config/audiocrate/.
+    Reads PlayStatsTracker, which keeps everything in a local JSON file in the config folder.
     """
 
     def __init__(self, stats: PlayStatsTracker, parent=None):

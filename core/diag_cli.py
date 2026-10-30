@@ -1,19 +1,19 @@
 """`python main.py --debug-dump` and `--debug-stacks`: ask the running AudioCrate what it is doing.
 
 Finds the instance through its pid file (diag.find_instance, which checks that the process is yours, still the one that
-wrote the file and running main.py), sends it SIGUSR1 (stacks) and SIGUSR2 (state snapshot) and nothing else, waits up to
-five seconds for the new files and prints where they are with a short summary. It never ends or restarts anything.
+wrote the file and running main.py), sends it SIGUSR1 (stacks) and SIGUSR2 (state snapshot) and nothing else (on Windows
+it sets the two named events that stand in for them), waits up to five seconds for the new files and prints where they
+are with a short summary. It never ends or restarts anything.
 Exit status: 0 files written, 1 no instance, 2 the instance did not answer in time.
 """
 from __future__ import annotations
 
 import json
-import os
-import signal
 import sys
 import time
 
 import diag
+import plat_diag
 
 WAIT_S = 5.0
 
@@ -39,9 +39,12 @@ def _main_line(stacks) -> str:
 def _summary(snap: dict) -> list[str]:
     out = []
     proc, audio, play = snap.get("process", {}), snap.get("audio", {}), snap.get("player", {})
-    if proc:
+    if proc and "swap_mb" in proc:
         out.append(f"memory: {proc.get('rss_mb', '?')} MB resident, {proc.get('pss_mb', '?')} MB proportional, "
                    f"{proc.get('swap_mb', '?')} MB in swap, {proc.get('thread_count', '?')} threads")
+    elif proc:                                  # Windows has no swap or sharing figures per process
+        out.append(f"memory: {proc.get('rss_mb', '?')} MB resident, {proc.get('private_mb', '?')} MB private, "
+                   f"{proc.get('thread_count', '?')} threads")
     if audio and "error" not in audio:
         state = "playing" if audio.get("playing_intent") else "not playing"
         out.append(f"audio: {state}, {audio.get('device') or 'no device name'}, {audio.get('rate')} Hz, "
@@ -67,9 +70,9 @@ def main(argv: list[str]) -> int:
     raw = diag.DEBUG_DIR / f"stacks-{pid}-raw.txt"
     since = time.time()
     try:
-        os.kill(pid, signal.SIGUSR1)
+        plat_diag.send_trigger(pid, "stacks")
         if not stacks_only:
-            os.kill(pid, signal.SIGUSR2)
+            plat_diag.send_trigger(pid, "snapshot")
     except OSError as e:
         print(f"Could not signal AudioCrate (pid {pid}): {e.strerror}.", file=sys.stderr)
         return 1

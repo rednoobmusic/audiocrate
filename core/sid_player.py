@@ -1,4 +1,4 @@
-"""Commodore 64 SID playback support (libsidplayfp via libsid_wrap.so).
+"""Commodore 64 SID playback support (libsidplayfp via libsid_wrap, a .so file on Linux and a .dll on Windows).
 
 A SID file is a 6502 program, not a recording: it has subsongs, and nothing in
 it says how long any of them last. So a tune is scanned once before it plays:
@@ -30,6 +30,8 @@ from pathlib import Path
 import numpy as np
 
 import loop_detect
+import plat_native
+import plat_paths
 from native_lock import RENDER_LOCK, prune_cache
 
 EXTS = {".sid", ".psid", ".rsid"}
@@ -37,13 +39,13 @@ EXTS = {".sid", ".psid", ".rsid"}
 _RATE = 44100
 _SCAN_S = 300            # how much to render while scanning for an ending
 _DEFAULT_S = 180.0       # last resort if nothing can be determined
-_CACHE = Path.home() / ".cache" / "audiocrate" / "sid"
+_CACHE = plat_paths.cache_dir() / "sid"
 
 # Where a Songlengths database may live. First hit wins; the setting in
 # Settings > Chiptune overrides all of these.
 _DB_CANDIDATES = (
-    Path.home() / ".config" / "audiocrate" / "Songlengths.md5",
-    Path.home() / ".local" / "share" / "audiocrate" / "Songlengths.md5",
+    plat_paths.config_dir() / "Songlengths.md5",
+    plat_paths.data_dir() / "Songlengths.md5",
     Path("/usr/share/hvsc/DOCUMENTS/Songlengths.md5"),
     Path.home() / "HVSC" / "DOCUMENTS" / "Songlengths.md5",
 )
@@ -65,23 +67,20 @@ def _load_lib():
     global _lib
     if _lib is not None:
         return _lib
-    for cand in (Path(__file__).resolve().parent.parent / "libsid_wrap.so",
-                 Path("libsid_wrap.so")):
-        try:
-            lib = ctypes.CDLL(str(cand))
-        except OSError:
-            continue
-        lib.sw_read_meta.argtypes = [ctypes.c_char_p, ctypes.POINTER(_Meta)]
-        lib.sw_read_meta.restype = ctypes.c_int
-        lib.sw_db_length.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
-        lib.sw_db_length.restype = ctypes.c_int
-        lib.sw_render.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
-                                  ctypes.c_int, ctypes.POINTER(ctypes.c_int16),
-                                  ctypes.c_int]
-        lib.sw_render.restype = ctypes.c_int
-        _lib = lib
-        return _lib
-    return None
+    lib = plat_native.load([Path(__file__).resolve().parent.parent / "libsid_wrap.so", Path("libsid_wrap.so")],
+                           "libsid_wrap.dll")
+    if lib is None:
+        return None
+    lib.sw_read_meta.argtypes = [ctypes.c_char_p, ctypes.POINTER(_Meta)]
+    lib.sw_read_meta.restype = ctypes.c_int
+    lib.sw_db_length.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
+    lib.sw_db_length.restype = ctypes.c_int
+    lib.sw_render.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
+                              ctypes.c_int, ctypes.POINTER(ctypes.c_int16),
+                              ctypes.c_int]
+    lib.sw_render.restype = ctypes.c_int
+    _lib = lib
+    return _lib
 
 
 def available() -> bool:
@@ -221,7 +220,7 @@ def known_length(path: Path, subsong: int = 1) -> float | None:
         return ms
     meta = _CACHE / f"{_key(path, subsong)}.json"
     try:
-        return float(json.loads(meta.read_text())["length"])
+        return float(json.loads(meta.read_text(encoding="utf-8"))["length"])
     except Exception:
         return None
 
@@ -239,7 +238,7 @@ def scan(path: Path, subsong: int = 1) -> tuple[str, float, str]:
     wav, meta = _CACHE / f"{k}.wav", _CACHE / f"{k}.json"
     if wav.exists() and meta.exists() and wav.stat().st_size > 1024:
         try:
-            d = json.loads(meta.read_text())
+            d = json.loads(meta.read_text(encoding="utf-8"))
             return str(wav), float(d["length"]), d.get("source", "cached")
         except Exception:
             pass
@@ -284,7 +283,7 @@ def scan(path: Path, subsong: int = 1) -> tuple[str, float, str]:
         w.writeframes(out.tobytes())
     try:
         meta.write_text(json.dumps({"length": length, "source": source,
-                                    "subsong": subsong}))
+                                    "subsong": subsong}), encoding="utf-8")
     except OSError:
         pass
     prune_cache(_CACHE)

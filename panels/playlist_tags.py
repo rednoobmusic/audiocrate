@@ -14,10 +14,12 @@ import time
 from pathlib import Path
 
 import logs
+import plat_fs
+import plat_paths
 
 _log = logs.get("tags")
 
-_DB_PATH = Path.home() / ".config" / "audiocrate" / "playlist_tags.db"
+_DB_PATH = plat_paths.config_dir() / "playlist_tags.db"
 _SCHEMA = 1
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
@@ -83,7 +85,7 @@ def get_many(paths: list[Path]) -> dict[Path, tuple]:
     stats: dict[str, float] = {}
     for p in paths:
         try:
-            stats[str(p)] = p.stat().st_mtime
+            stats[plat_fs.path_key(p)] = p.stat().st_mtime
         except OSError:
             result[p] = NONE
     cached: dict[str, tuple] = {}
@@ -99,7 +101,7 @@ def get_many(paths: list[Path]) -> dict[Path, tuple]:
     fresh = []
     misses = 0
     for p in paths:
-        key = str(p)
+        key = plat_fs.path_key(p)
         if key not in stats:
             continue
         row = cached.get(key)

@@ -11,9 +11,10 @@ import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 
-_SETTINGS = Path.home() / ".config" / "audiocrate" / "settings.json"
+import plat_paths
+
+_SETTINGS = plat_paths.config_dir() / "settings.json"
 
 DEFAULT_EXCEPTIONS = (
     "Earth, Wind & Fire", "Crosby, Stills & Nash", "Crosby, Stills, Nash & Young", "Tyler, The Creator",

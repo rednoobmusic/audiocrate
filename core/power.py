@@ -1,6 +1,10 @@
 """Whether the machine is in a power saving profile, so the animated panels can
-drop to a lower frame rate there instead of fighting for a throttled CPU."""
+drop to a lower frame rate there instead of fighting for a throttled CPU. Linux reads the ACPI platform profile,
+Windows asks whether Battery saver is on."""
 from __future__ import annotations
+
+import ctypes
+import sys
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -9,9 +13,25 @@ _SAVING = {"low-power", "quiet"}
 _SAVER_MS = 33     # frame interval ceiling while saving (30 fps)
 
 
-def _read() -> bool:
+class _PowerStatus(ctypes.Structure):
+    _fields_ = [("ac_line", ctypes.c_ubyte), ("battery_flag", ctypes.c_ubyte), ("battery_percent", ctypes.c_ubyte),
+                ("system_status", ctypes.c_ubyte), ("battery_life", ctypes.c_uint32), ("battery_full_life", ctypes.c_uint32)]
+
+
+def _battery_saver() -> bool:
+    """SYSTEM_POWER_STATUS.SystemStatusFlag is 1 while Battery saver is on."""
     try:
-        with open(_PROFILE) as f:
+        status = _PowerStatus()
+        return bool(ctypes.WinDLL("kernel32", use_last_error=True).GetSystemPowerStatus(ctypes.byref(status))) and status.system_status == 1
+    except (OSError, AttributeError):
+        return False
+
+
+def _read() -> bool:
+    if sys.platform == "win32":
+        return _battery_saver()
+    try:
+        with open(_PROFILE, encoding="utf-8") as f:
             return f.read().strip() in _SAVING
     except OSError:
         return False

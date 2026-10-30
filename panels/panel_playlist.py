@@ -17,6 +17,9 @@ from player import Player, PLAYABLE_EXTS
 import threading
 import library_cache
 import logs
+import plat_fs
+import plat_paths
+import plat_proc
 import playlist_tags
 from playlist_model import (
     GROUPS, NEEDS_EXTRA, PRESETS, SORT_FIELDS, Row, describe_sort, fmt_total, plural,
@@ -32,11 +35,11 @@ def _open_folder(path: Path):
 
     try:
         if sys.platform.startswith("linux"):
-            subprocess.Popen(["xdg-open", str(path.parent)])
+            subprocess.Popen(["xdg-open", str(path.parent)], **plat_proc.popen_kwargs(group=False))
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", str(path)])
+            subprocess.Popen(["open", "-R", str(path)], **plat_proc.popen_kwargs(group=False))
         else:
-            subprocess.Popen(["explorer", "/select,", str(path)])
+            subprocess.Popen(["explorer", "/select,", str(path)], **plat_proc.popen_kwargs(group=False))
     except Exception:
         pass
 
@@ -102,7 +105,7 @@ class _TagEditDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Save error", str(e))
 
-_SESSION = Path.home() / ".config" / "audiocrate" / "playlists.json"
+_SESSION = plat_paths.config_dir() / "playlists.json"
 
 
 _MAX_UNDO = 20
@@ -1373,7 +1376,7 @@ class PlaylistPanel(QWidget):
             return
         new_path = path.with_name(new_name.strip() + path.suffix)
         try:
-            path.rename(new_path)
+            plat_fs.rename(path, new_path)
         except Exception as e:
             QMessageBox.warning(self, "Rename failed", str(e))
             return

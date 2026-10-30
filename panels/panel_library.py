@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QMenu,
 )
 
+import plat_paths
 from player import Player, PLAYABLE_EXTS as AUDIO_EXTS
 from library_covers import CoverCache
 from library_model import AlbumModel, ArtistModel, LibData, TrackModel
@@ -25,7 +26,7 @@ from library_views import AlbumView, ArtistView, FolderTree, TrackView, ROLE_COU
 from library_widgets import (EmptyState, ModeSwitch, PillButton, ProgressLine, Scheme, StatusLine,
                              ToolButton, draw_glyph)
 
-_LIB_CFG      = Path.home() / ".config" / "audiocrate" / "library.json"
+_LIB_CFG      = plat_paths.config_dir() / "library.json"
 _PLACEHOLDER  = "__placeholder__"
 _last_lib_dir: str = str(Path.home())
 
@@ -543,7 +544,7 @@ class LibraryWidget(QWidget):
         # is watched, not just the library folders: an album that lands three levels down must be seen too.
         want = {str(f) for f in self._folders} | self._watch_dirs
         if len(want) > _WATCH_MAX:
-            want = set(sorted(want, key=lambda d: d.count("/"))[:_WATCH_MAX])
+            want = set(sorted(want, key=lambda d: d.count(os.sep))[:_WATCH_MAX])
         have = set(self._watcher.directories())
         if have - want:
             self._watcher.removePaths(sorted(have - want))

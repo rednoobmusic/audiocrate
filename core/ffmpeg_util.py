@@ -6,7 +6,18 @@ import subprocess
 from pathlib import Path
 import sys
 
+import plat_proc
+
 _resolved: str | None = None
+
+
+def _candidates(folders: list[Path]) -> list[Path]:
+    """Every file that may be ffmpeg in these folders, in the order they are tried. On Windows a build also sits in
+    the tools folder of the release, an ffmpeg folder or a bin folder, and a plain "ffmpeg" there would be that
+    folder, so only the .exe name counts."""
+    if sys.platform == "win32":
+        return [d / "ffmpeg.exe" for f in folders for d in (f, f / "tools", f / "ffmpeg", f / "bin")]
+    return [f / name for f in folders for name in ("ffmpeg", "ffmpeg.exe")]
 
 
 def ffmpeg_path() -> str | None:
@@ -17,18 +28,17 @@ def ffmpeg_path() -> str | None:
 
     # When running as PyInstaller bundle, sys.executable is inside the AppDir
     here = Path(sys.executable).parent
-    for candidate in (here / "ffmpeg", here / "ffmpeg.exe"):
+    for candidate in _candidates([here]):
         if candidate.exists():
             _resolved = str(candidate)
             return _resolved
 
     # Also check next to this module and the project root (dev mode / folder layout)
     here2 = Path(__file__).parent
-    for base in (here2, here2.parent):
-        for candidate in (base / "ffmpeg", base / "ffmpeg.exe"):
-            if candidate.exists():
-                _resolved = str(candidate)
-                return _resolved
+    for candidate in _candidates([here2, here2.parent]):
+        if candidate.exists():
+            _resolved = str(candidate)
+            return _resolved
 
     # last, the system PATH
     found = shutil.which("ffmpeg")
@@ -64,7 +74,7 @@ def probe_duration(path: Path | str) -> float:
         r = subprocess.run(
             [probe, "-v", "quiet", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", str(path)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, **plat_proc.popen_kwargs(group=False),
         )
         return float(r.stdout.decode().strip())
     except Exception:

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import subprocess
 import tempfile
 import threading
@@ -14,6 +13,7 @@ import unicodedata
 from pathlib import Path
 
 import cli_render
+import plat_proc
 import sid_player
 from artists import join_artists, split_artists
 
@@ -168,7 +168,7 @@ def read_mounts(path: str | Path = '/proc/self/mountinfo') -> dict[str, dict]:
     stalled network mount cannot hold this up."""
     out: dict = {}
     try:
-        lines = Path(path).read_text(errors='surrogateescape').splitlines()
+        lines = Path(path).read_text(encoding='utf-8', errors='surrogateescape').splitlines()
     except OSError:
         return out
     for line in lines:
@@ -230,26 +230,14 @@ def run_until_cancel(fn, cancel: threading.Event, *args):
 
 # ffmpeg
 
-def kill_group(p: subprocess.Popen):
-    """Kill a child started with start_new_session=True together with everything it started."""
-    if p.poll() is not None:                # gone and reaped: its number may belong to someone else now
-        return
-    try:
-        os.killpg(p.pid, signal.SIGKILL)
-    except OSError:
-        try:
-            p.kill()
-        except OSError:
-            pass
-
-
 def run_ffmpeg(args: list, cancel: threading.Event, on_progress=None, on_proc=None, keep: int = 300) -> tuple[int, str]:
     """One ffmpeg run, which has to ask for `-progress pipe:1`. on_progress(seconds) hears how far the output has
     got, on_proc(process) gets the process when it starts and None when it is over, so that a canceller can kill
     it. Returns the exit code and the last `keep` bytes of what ffmpeg said on stderr. Raises Cancelled when cancel is set."""
     err = tempfile.TemporaryFile()
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=err, stdin=subprocess.DEVNULL, text=True,
-                         start_new_session=True)
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=err, stdin=subprocess.DEVNULL, text=True, encoding='utf-8',
+                         **plat_proc.popen_kwargs(low=True))
+    plat_proc.contain(p)
     if on_proc:
         on_proc(p)
     try:
@@ -266,7 +254,7 @@ def run_ffmpeg(args: list, cancel: threading.Event, on_progress=None, on_proc=No
         if on_proc:
             on_proc(None)
         if p.poll() is None:
-            kill_group(p)
+            plat_proc.kill_tree(p)
             p.wait()
         p.stdout.close()
     if cancel.is_set():

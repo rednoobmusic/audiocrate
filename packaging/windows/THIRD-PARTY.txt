@@ -1,0 +1,81 @@
+Third-party software in this folder
+
+AudioCrate itself is GPL-2.0-or-later (AudioCrate-GPL-2.0.txt). This file lists what else is in the folder, under which
+licence, and where the source is. The licence texts are in this LICENSES folder unless a line says otherwise.
+
+
+Libraries for the chiptune formats and the visualizer (libs folder)
+
+  libgme.dll                  Game_Music_Emu 0.6.5, LGPL-2.1-or-later. Source: https://github.com/libgme/game-music-emu
+                              Text: libs\LICENSES\libgme-LGPL-2.1.txt
+  libfurnace_wrap.dll         AudioCrate's wrapper (_furnace_wrapper_src in the source zip) around the Furnace engine, tag dev250
+                              (commit 158e41f), GPL-2.0-or-later, built with the patches in source\winlibs-patches.
+                              Furnace's extern folder has code under other licences, all in libs\LICENSES\furnace-extern.
+                              Source: https://github.com/tildearrow/furnace
+  libsid_wrap.dll             AudioCrate's wrapper (_sid_wrapper_src in the source zip) with libsidplayfp 3.1.1 and libresidfp 1.2.2,
+                              GPL-2.0-or-later. Source: https://github.com/libsidplayfp
+  projectM-4.dll, projectM-4-playlist.dll
+                              libprojectM 4.1.6 (the Milkdrop visualizer), LGPL-2.1, with GLEW 2.3.1, built with the
+                              patches in source\winlibs-patches. Source: https://github.com/projectM-visualizer/projectm
+                              Texts: libs\LICENSES\projectM-* and glew-LICENSE.txt
+
+  These are built without changes other than the patches listed above, for 64 bit Windows, and import system DLLs only.
+  The LGPL libraries are separate DLLs, so they can be replaced by other builds of the same version.
+
+
+Programs AudioCrate starts (tools folder)
+
+  ffmpeg.exe, ffprobe.exe and the avcodec, avformat, avutil, avfilter, avdevice, swscale and swresample DLLs
+                              FFmpeg n9.0.2-25-g67b60c310b, the LGPL shared build from BtbN/FFmpeg-Builds (release
+                              autobuild-2026-10-10-13-04, file ffmpeg-n9.0.2-25-g67b60c310b-win64-lgpl-shared-9.0.zip,
+                              sha256 a68c86127a4185bcb9035d39d54f8b6873681896b860af999d8987be3c696de4). LGPL-3.0-or-later,
+                              it links LAME, Opus, TwoLAME and others that allow this. Text: ffmpeg-LICENSE.txt.
+                              Source: https://ffmpeg.org/ (git commit 67b60c310b of the n9.0 branch); build scripts:
+                              https://github.com/BtbN/FFmpeg-Builds. Not modified; the DLLs can be replaced by other
+                              builds of the same major versions.
+  openmpt123.exe              libopenmpt 0.8.9 command line player, BSD-3-Clause, with libsndfile 1.2.2, LGPL-2.1.
+                              Source: https://lib.openmpt.org/ and https://github.com/libsndfile/libsndfile; one patch
+                              (source\winlibs-patches). Texts: libs\LICENSES\libopenmpt-BSD-3-Clause.txt, libsndfile-LGPL-2.1.txt
+  zxtune123\                  zxtune r5100, GPL-3.0, with the DLLs of the official build (LAME, FLAC, Ogg, Vorbis, libcurl).
+                              Text: GPL-3.0.txt. The unmodified official Windows build of revision r5100:
+                              https://storage.zxtune.ru/builds/public/r5100/mingw/x86_64/zxtune_r5100_mingw_x86_64.zip
+                              (sha256 2aa6ef152fb4f851434780964a60042ad0e423565f8df1feca092fc13954bd45).
+                              Source: https://github.com/vitamin-caig/zxtune
+
+  ffmpeg, openmpt123 and zxtune123 run as programs of their own. AudioCrate only passes them files and arguments.
+
+
+The program (AudioCrate.exe and the _internal folder)
+
+  Python 3.14.7                PSF licence, Python-PSF.txt
+  Qt 6.11.0 and PySide6/Shiboken 6.11.0
+                              LGPL-3.0 (Qt-and-PySide6-LGPL-3.0.txt, which refers to GPL-3.0.txt). Unmodified, linked
+                              dynamically from _internal\PySide6, where the DLLs can be replaced by others of the same
+                              version. Source: https://download.qt.io/official_releases/qt/6.11/ and
+                              https://code.qt.io/cgit/pyside/pyside-setup.git
+                              The FFmpeg 7.1 DLLs in the same folder (avcodec-61 and the others) belong to Qt's multimedia
+                              plugin and are LGPL as well.
+  numpy 2.5.3, scipy 1.18.1   BSD-3-Clause (numpy\, scipy\). They carry OpenBLAS and the Microsoft C++ runtime.
+  Pillow 12.3.0               HPND (Pillow\LICENSE)
+  mutagen 1.47.0              GPL-2.0-or-later (mutagen\COPYING)
+  pypresence 4.6.2            MIT (pypresence\LICENSE)
+  OpenSSL 3                   Apache-2.0 (OpenSSL-Apache-2.0.txt), as built into Python 3.14.7
+  SQLite                      public domain, as built into Python 3.14.7
+  PyInstaller 6.22.3          GPL-2.0-or-later with an exception that lets the programs it builds use any licence
+                              (PyInstaller\COPYING.txt, PyInstaller-hooks\LICENSE). Its bootloader is AudioCrate.exe.
+  Microsoft Visual C++ runtime (vcruntime140.dll, msvcp140.dll and the like)
+                              redistributed under the terms Microsoft gives for the Visual C++ Redistributable
+  JetBrains Mono 2.304 with Nerd Fonts 3.4.0 glyphs (_internal\JetBrainsMono)
+                              SIL Open Font License 1.1 (JetBrainsMono-OFL-1.1.txt). The symbols added by Nerd Fonts
+                              come from icon sets with their own licences: https://github.com/ryanoasis/nerd-fonts
+  React (the phone web remote in _internal\webui, built into minified files)
+                              MIT, licence line in the files themselves
+
+
+Source code
+
+The source of AudioCrate (the Python files, the two wrapper programs and the files that build this release) is in the
+source folder of this release, in AudioCrate-source.zip, next to the patches that were applied to Furnace, the SID wrapper,
+projectM and openmpt123 for Windows (winlibs-patches). The sources of the other GPL and LGPL parts are at the addresses
+above, at the versions named. Anyone who got this folder from the AudioCrate project can ask the project for a copy of the
+source of any part of it that is not already at one of those addresses.

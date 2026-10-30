@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
 import anim
+import plat_proc
 
 try:
     from shiboken6 import isValid as _qt_valid
@@ -64,6 +65,7 @@ def _compute_waveform(path: Path, n: int, alive=None) -> np.ndarray | None:
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
+        **plat_proc.popen_kwargs(group=False),
     )
     done = threading.Event()
     if alive is not None:
@@ -100,9 +102,9 @@ def _compute_waveform_gme(path: Path, n: int, track_idx: int = 0, alive=None) ->
     whole tune to its play length and bin it to n RMS points. `track_idx` selects the
     subsong for multi-tune formats (NSF/SAP/GBS/KSS/AY)."""
     import ctypes
-    from vgm_player import _lib as gme, _GmeInfo
+    from vgm_player import _lib as gme, _GmeInfo, gme_open
     emu = ctypes.c_void_p()
-    if gme.gme_open_file(str(path).encode(), ctypes.byref(emu), _RATE):
+    if gme_open(gme, str(path).encode(), emu, _RATE):
         return np.zeros(n, dtype=np.float32)
     try:
         # length of this subsong, not of track 0

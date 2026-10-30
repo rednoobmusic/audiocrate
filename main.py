@@ -12,6 +12,8 @@ if getattr(sys, "frozen", False) and "--ipod-helper" in sys.argv:
 if __name__ == "__main__" and ("--debug-dump" in sys.argv[1:] or "--debug-stacks" in sys.argv[1:]):
     import _bootstrap  # noqa: F401
     import diag_cli
+    import plat_diag
+    plat_diag.attach_console()
     sys.exit(diag_cli.main(sys.argv[1:]))
 
 
@@ -46,12 +48,20 @@ def _supervise() -> int | None:
     return code if code >= 0 else 128 - code
 
 
-if (__name__ == "__main__" and not getattr(sys, "frozen", False)
+if (__name__ == "__main__" and not getattr(sys, "frozen", False) and sys.platform != "win32"
         and not os.environ.get("AUDIOCRATE_SUPERVISED")
         and not os.environ.get("AUDIOCRATE_NO_SUPERVISOR")):
     sys.exit(_supervise())
 
 import _bootstrap  # noqa: F401  (puts core, panels, integrations and ui on sys.path)
+import plat_single  # noqa: E402
+
+# A second start (Explorer starts one process for each file of a selection) hands its files to the first and ends. Only
+# Windows does this. AUDIOCRATE_NO_SINGLE=1 starts a player of its own.
+if (__name__ == "__main__" and not os.environ.get("AUDIOCRATE_NO_SINGLE")
+        and not plat_single.acquire(sys.argv[1:])):
+    sys.exit(0)
+
 import memtune  # noqa: E402
 
 memtune.early()
@@ -64,13 +74,15 @@ if getattr(sys, "frozen", False):
 # back to the interpreter's name ("python3") when it isn't there. Importing
 # QtMultimedia is what eventually loads them. See core/audio_identity.py.
 import audio_identity
+import plat_audio
 
 audio_identity.apply()
+plat_audio.app_identity()
 
 # After audio_identity, because that has to run before any Qt audio class
 # exists, and before everything else, so a crash on the way up still leaves a
 # trace. faulthandler turns a bare "Segmentation fault" into the Python stack
-# of every thread, written to the terminal and to ~/.config/audiocrate/crash.log.
+# of every thread, written to the terminal and to crash.log in the config folder.
 import logs  # noqa: E402
 
 logs.setup()
@@ -117,7 +129,7 @@ def _keep_resident():
     pulling in pages already swapped out or filling empty address space.
     AUDIOCRATE_NO_MLOCK=1 turns it off."""
     memtune.trim(force=True)    # free heap goes back first, pinned it could not be
-    if os.environ.get("AUDIOCRATE_NO_MLOCK"):
+    if os.environ.get("AUDIOCRATE_NO_MLOCK") or sys.platform == "win32":
         return
     try:
         import ctypes
@@ -135,7 +147,8 @@ def _keep_resident():
 
 
 if __name__ == "__main__":
-    _suppress_alsa_noise()
+    if sys.platform != "win32":
+        _suppress_alsa_noise()
 
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
@@ -154,7 +167,8 @@ if __name__ == "__main__":
 
     # the theme choice has to be known before any widget exists
     import json
-    _cfg_file = Path.home() / ".config" / "audiocrate" / "settings.json"
+    import plat_paths
+    _cfg_file = plat_paths.config_dir() / "settings.json"
     _system_theme = True
     try:
         _system_theme = json.loads(_cfg_file.read_text(encoding="utf-8")).get("system_theme", True)
@@ -200,21 +214,49 @@ if __name__ == "__main__":
         if not a.startswith("file://"):
             return a
         u = QUrl(a)
+        if sys.platform == "win32":
+            if u.host() == "localhost":
+                u.setHost("")           # file://localhost/C:/a.mp3 is file:///C:/a.mp3
+            return u.toLocalFile()      # drops the slash before the drive letter that path() keeps
         return u.path() if u.host() in ("", "localhost") else u.toLocalFile()
 
-    _args = [_as_path(a) for a in sys.argv[1:]]
-    _open = [a for a in _args if os.path.isfile(a)]
-    if _open:
-        QTimer.singleShot(0, lambda: w.open_files(_open))
-    _dirs = [Path(a) for a in _args if os.path.isdir(a)]
-    if _dirs:
-        QTimer.singleShot(0, lambda: w._scan_folders_async(_dirs))
-    _links = [a for a in _args if a.startswith(("http://", "https://"))]
-    if _links:
-        QTimer.singleShot(0, lambda: w.open_link(_links[0]))
+    def _open_args(argv):
+        """Open what the arguments name: files into the playlist, folders into the library, a link into Online. Returns
+        the files, the folders and the links."""
+        _args = [_as_path(a) for a in argv]
+        _open = [a for a in _args if os.path.isfile(a)]
+        if _open:
+            QTimer.singleShot(0, lambda: w.open_files(_open))
+        _dirs = [Path(a) for a in _args if os.path.isdir(a)]
+        if _dirs:
+            QTimer.singleShot(0, lambda: w._scan_folders_async(_dirs))
+        _links = [a for a in _args if a.startswith(("http://", "https://"))]
+        if _links:
+            QTimer.singleShot(0, lambda: w.open_link(_links[0]))
+        return _open, _dirs, _links
+
+    _open, _dirs, _links = _open_args(sys.argv[1:])
     w.start_tour(skip=bool(_open or _links or _dirs))
 
-    for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    # What a second start sends arrives on another thread; the window takes it on this one.
+    from PySide6.QtCore import QObject, Signal
+
+    class _Forwarded(QObject):
+        arrived = Signal(list)
+
+    def _take_forwarded(argv):
+        _open_args(argv)
+        if w.isMinimized():
+            w.showNormal()
+        w.raise_()
+        w.activateWindow()
+
+    _relay = _Forwarded()
+    _relay.arrived.connect(_take_forwarded, Qt.ConnectionType.QueuedConnection)
+    plat_single.serve(_relay.arrived.emit)
+
+    for _sig in ((signal.SIGINT, signal.SIGTERM, signal.SIGBREAK) if sys.platform == "win32"
+                 else (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
         signal.signal(_sig, lambda *_: w.close())
     # Python-level signal handlers only run when the interpreter wakes up, so tick once a second.
     _sig_timer = QTimer()
@@ -222,11 +264,32 @@ if __name__ == "__main__":
     _sig_timer.timeout.connect(lambda: None)
     _sig_timer.start()
 
+    # Windows is asked for a 1 ms timer tick and no background throttling only while something plays, and a few
+    # seconds longer so the gap between two songs does not give them up and ask again.
+    _hold = plat_audio.Hold()
+    _hold_timer = QTimer()
+    _hold_timer.setSingleShot(True)
+    _hold_timer.setInterval(5000)
+    _hold_timer.timeout.connect(_hold.release)
+
+    def _playing(on):
+        if on:
+            _hold_timer.stop()
+            _hold.acquire()
+        else:
+            _hold_timer.start()
+    if sys.platform == "win32":
+        w._player.state_changed.connect(_playing)
+        if w._player.is_playing:
+            _playing(True)
     ret = app.exec()
+    _hold.release()
     diag.shutdown()
     # libfurnace's engine (created up-front for .fur support) starts a native
     # thread that never terminates and that fw_destroy doesn't stop, so a normal
     # interpreter shutdown hangs the process. State is already persisted in the
     # window's closeEvent, so hard-exit to guarantee the process actually quits.
-    sys.stdout.flush(); sys.stderr.flush()
+    for _stream in (sys.stdout, sys.stderr):        # a windowed build has neither
+        if _stream is not None:
+            _stream.flush()
     os._exit(ret if ret is not None else 0)

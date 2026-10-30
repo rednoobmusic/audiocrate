@@ -2,8 +2,9 @@
 
 install() runs once from main.py after logging is up. From then on:
 
-  SIGUSR1  writes the stack of every Python thread to ~/.config/audiocrate/debug/stacks-<pid>-<time>.txt
+  SIGUSR1  writes the stack of every Python thread to debug/stacks-<pid>-<time>.txt in the config folder
   SIGUSR2  writes a state snapshot to snapshot-<pid>-<time>.json next to it
+           (Windows has no signals: a named event for each, set by `--debug-dump`, see plat_diag.py)
   a heartbeat on the GUI thread and a watcher thread record every stretch where the window did not answer for
   more than half a second (the stack the GUI thread was in), in the log and for the Diagnostics window
 
@@ -31,7 +32,10 @@ import types
 import weakref
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "audiocrate"
+import plat_diag
+import plat_paths
+
+CONFIG_DIR = plat_paths.config_dir()
 DEBUG_DIR = CONFIG_DIR / "debug"
 KEEP_FILES = 10             # of each kind
 STACKS_GLOB = "stacks-*[0-9].txt"           # not the -raw one faulthandler writes
@@ -41,17 +45,6 @@ LONG_STALL_S = 3.0          # a stall still going after this long is logged whil
 LOG_BURST = (10, 60.0)       # at most this many stall lines in this many seconds; the rest are only kept in memory
 
 log = logging.getLogger("audiocrate.diag")
-
-
-def _vmem(key: str) -> int:
-    """kB of one field of /proc/self/status."""
-    try:
-        for line in Path("/proc/self/status").read_text().splitlines():
-            if line.startswith(key + ":"):
-                return int(line.split()[1])
-    except (OSError, ValueError, IndexError):
-        pass
-    return 0
 
 
 _S = types.SimpleNamespace(
@@ -66,6 +59,7 @@ _S = types.SimpleNamespace(
     cache={},                   # what only the GUI thread may read, refreshed by the heartbeat
     docks=[],
     rfd=-1, wfd=-1,
+    trigger=None,               # the named events that stand in for the signals on Windows
     raw=None,                   # file faulthandler writes into from the signal handler
     raw_path=None,
     stop=threading.Event(),
@@ -78,38 +72,11 @@ _S = types.SimpleNamespace(
 # which process is the running AudioCrate
 
 def runtime_dir() -> Path:
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if base and os.path.isdir(base):
-        return Path(base)
-    import tempfile
-    return Path(tempfile.gettempdir()) / f"audiocrate-{os.getuid()}"     # install() makes it with mode 700
+    return plat_paths.runtime_dir()             # install() makes it with mode 700
 
 
 def pid_file() -> Path:
     return runtime_dir() / "audiocrate.pid"
-
-
-def proc_start(pid: int) -> int | None:
-    """The process start time in clock ticks since boot (field 22 of /proc/PID/stat), None when there is no such process."""
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_text()
-        return int(raw[raw.rindex(")") + 2:].split()[19])
-    except (OSError, ValueError, IndexError):
-        return None
-
-
-def looks_like_app(pid: int) -> bool:
-    """Is this pid a process of this user running AudioCrate's main.py, its compiled main.pyc or a frozen build."""
-    try:
-        if os.stat(f"/proc/{pid}").st_uid != os.getuid():
-            return False
-        argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-    except OSError:
-        return False
-    names = [os.path.basename(a.decode("utf-8", "replace")) for a in argv if a]
-    if not names:
-        return False
-    return (names[0].startswith("python") and any(n in ("main.py", "main.pyc") for n in names[1:6])) or names[0].startswith("audiocrate")
 
 
 def find_instance() -> tuple[int | None, str]:
@@ -117,15 +84,15 @@ def find_instance() -> tuple[int | None, str]:
     comes from the pid file, and is only believed when that process still started when the file says it did."""
     pf = pid_file()
     try:
-        pid_s, start_s = pf.read_text().split()[:2]
+        pid_s, start_s = pf.read_text(encoding="utf-8").split()[:2]
         pid, start = int(pid_s), int(start_s)
     except (OSError, ValueError):
         return None, "No running AudioCrate was found (there is no pid file, or it is not readable)."
     if pid == os.getpid():
         return None, "The pid file names this process, not a running AudioCrate."
-    if proc_start(pid) != start:
+    if plat_diag.proc_start(pid) != start:
         return None, f"The pid file names process {pid}, which is not running any more."
-    if not looks_like_app(pid):
+    if not plat_diag.looks_like_app(pid):
         return None, f"Process {pid} is not an AudioCrate of yours, so nothing was sent to it."
     return pid, ""
 
@@ -146,11 +113,11 @@ def _check_previous_run() -> None:
     """A run that did not end through the normal exit leaves its marker behind. Say so, with where the evidence is."""
     marker = DEBUG_DIR / "running.json"
     try:
-        old = json.loads(marker.read_text())
+        old = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     pid, start = old.get("pid"), old.get("start")
-    if isinstance(pid, int) and pid != os.getpid() and proc_start(pid) == start and looks_like_app(pid):
+    if isinstance(pid, int) and pid != os.getpid() and plat_diag.proc_start(pid) == start and plat_diag.looks_like_app(pid):
         return                                  # another AudioCrate is running right now, not a dead one
     parts = [f"the previous run (pid {pid}, started {old.get('started', '?')}) did not end normally"]
     crash = CONFIG_DIR / "crash.log"
@@ -203,25 +170,25 @@ def install(detailed_default: bool = False) -> bool:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         _check_previous_run()
         for f in DEBUG_DIR.glob("stacks-*-raw.txt"):          # left by runs that were killed
-            if proc_start(int(f.name.split("-")[1])) is None:
+            if plat_diag.proc_start(int(f.name.split("-")[1])) is None:
                 f.unlink(missing_ok=True)
-        start = proc_start(os.getpid())
+        start = plat_diag.proc_start(os.getpid())
         _write_private(DEBUG_DIR / "running.json", json.dumps(
             {"pid": os.getpid(), "start": start, "started": time.strftime("%Y-%m-%d %H:%M:%S")}))
         _write_private(pid_file(), f"{os.getpid()} {start}\n")
     except OSError as e:
         log.warning("diagnostics files could not be written: %s", e)
+    events = plat_diag.uses_events()
     try:
-        _install_signals()
+        (_install_events if events else _install_signals)()
     except (OSError, ValueError, RuntimeError, AttributeError) as e:
-        log.warning("diagnostic signals could not be installed: %s", e)
+        log.warning("diagnostic %s could not be installed: %s", "events" if events else "signals", e)
         return False
     _S.installed = True
     log.debug("pid file %s, dumps go to %s", pid_file(), DEBUG_DIR)
     _S.thread = threading.Thread(target=_watch, name="diag-watch", daemon=True)
     _S.thread.start()
-    log.info("diagnostics ready: kill -USR1 %d writes stacks, kill -USR2 writes a snapshot, both into %s",
-             os.getpid(), DEBUG_DIR)
+    log.info("diagnostics ready: %s, both into %s", plat_diag.how_to(os.getpid()), DEBUG_DIR)
     return True
 
 
@@ -248,13 +215,23 @@ def _install_signals() -> None:
     signal.signal(signal.SIGUSR1, lambda *_: None)
     signal.signal(signal.SIGUSR2, lambda *_: None)
     signal.set_wakeup_fd(w, warn_on_full_buffer=False)
+    _open_raw()
+    faulthandler.register(signal.SIGUSR1, file=_S.raw, all_threads=True, chain=True)
+
+
+def _install_events() -> None:
+    _S.trigger = plat_diag.Trigger()
+    _open_raw()
+
+
+def _open_raw() -> None:
+    """The file faulthandler writes into when Python cannot: from the signal handler, or after a freeze."""
     try:
         _S.raw_path = DEBUG_DIR / f"stacks-{os.getpid()}-raw.txt"
         fd = os.open(_S.raw_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_APPEND, 0o600)
         _S.raw = os.fdopen(fd, "wb", buffering=0)
     except OSError:
         _S.raw = sys.stderr
-    faulthandler.register(signal.SIGUSR1, file=_S.raw, all_threads=True, chain=True)
 
 
 def attach(window) -> None:
@@ -274,6 +251,7 @@ def attach(window) -> None:
 def shutdown() -> None:
     """The normal exit: the markers go, so the next start knows this run ended properly."""
     _S.stop.set()
+    plat_diag.freeze_dump_off()
     if _S.timer is not None:
         try:
             _S.timer.stop()
@@ -281,7 +259,7 @@ def shutdown() -> None:
             pass
     for path in (DEBUG_DIR / "running.json", pid_file(), DEBUG_DIR / f"stacks-{os.getpid()}-raw.txt"):
         try:
-            if path.name == "audiocrate.pid" and path.read_text().split()[0] != str(os.getpid()):
+            if path.name == "audiocrate.pid" and path.read_text(encoding="utf-8").split()[0] != str(os.getpid()):
                 continue                       # a newer instance owns it
             path.unlink()
         except (OSError, IndexError):
@@ -293,6 +271,7 @@ def shutdown() -> None:
 def _on_beat() -> None:
     _S.beat = time.monotonic()
     _S.beat_n += 1
+    plat_diag.freeze_dump(_S.raw)
     if _S.beat_n % 20 == 1:
         _refresh_cache()
 
@@ -323,22 +302,30 @@ def _refresh_cache() -> None:
 
 def _watch() -> None:
     while not _S.stop.is_set():
-        try:
-            ready = select.select([_S.rfd], [], [], 0.1)[0]
-        except (OSError, ValueError):
-            return
-        now = time.monotonic()
-        if ready:
+        if _S.trigger is not None:
+            fired = _S.trigger.wait(0.1)
+            now = time.monotonic()
+            for which in fired:
+                _on_trigger(which)
+        else:
             try:
-                data = os.read(_S.rfd, 64)
-            except OSError:
-                data = b""
-            for sig in set(data):
-                _on_signal(sig)
+                ready = select.select([_S.rfd], [], [], 0.1)[0]
+            except (OSError, ValueError):
+                return
+            now = time.monotonic()
+            if ready:
+                try:
+                    data = os.read(_S.rfd, 64)
+                except OSError:
+                    data = b""
+                for sig in set(data):
+                    _on_signal(sig)
         try:
             _check_stall(now)
         except Exception:
             log.exception("diagnostics watcher failed")
+    if _S.trigger is not None:
+        _S.trigger.close()
 
 
 def _on_signal(sig: int) -> None:
@@ -346,6 +333,13 @@ def _on_signal(sig: int) -> None:
         write_stacks("SIGUSR1")
     elif sig == signal.SIGUSR2:
         write_snapshot("SIGUSR2")
+
+
+def _on_trigger(which: str) -> None:
+    if which == "stacks":
+        write_stacks("stacks event")
+    elif which == "snapshot":
+        write_snapshot("snapshot event")
 
 
 def _frame_summary(frame) -> tuple[str, list[str]]:
@@ -501,45 +495,9 @@ def _static() -> dict:
             m = sys.modules.get(mod)
             if m is not None:
                 d[mod] = getattr(m, "__version__", "?")
-        u = os.uname()
-        d["system"] = f"{u.sysname} {u.release} {u.machine}"
-        try:
-            for line in Path("/etc/os-release").read_text().splitlines():
-                if line.startswith("PRETTY_NAME="):
-                    d["distribution"] = line.split("=", 1)[1].strip().strip('"')
-        except OSError:
-            pass
+        d.update(plat_diag.system_info())
         _S.static = d
     return dict(_S.static)
-
-
-def _process() -> dict:
-    out = {"rss_mb": round(_vmem("VmRSS") / 1024, 1), "swap_mb": round(_vmem("VmSwap") / 1024, 1),
-           "locked_mb": round(_vmem("VmLck") / 1024, 1), "thread_count": _vmem("Threads"),
-           "cpu_seconds": round(time.process_time(), 1)}
-    try:
-        for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
-            key, _, rest = line.partition(":")
-            if key in ("Pss", "Private_Dirty", "Shared_Clean"):
-                out[key.lower() + "_mb"] = round(int(rest.split()[0]) / 1024, 1)
-    except (OSError, ValueError, IndexError):
-        pass
-    try:
-        out["open_files"] = len(os.listdir("/proc/self/fd"))
-    except OSError:
-        pass
-    return out
-
-
-def _os_threads() -> list[str]:
-    """Every thread of the process by the name the OS has for it (Qt's threads show their object name here)."""
-    out = []
-    for tid in os.listdir("/proc/self/task"):
-        try:
-            out.append(Path(f"/proc/self/task/{tid}/comm").read_text().strip())
-        except OSError:
-            pass
-    return sorted(out)
 
 
 def _percentiles(values: list[float]) -> dict:
@@ -611,8 +569,8 @@ def snapshot(reason: str = "") -> dict:
     win = _S.window() if _S.window else None
     now = time.monotonic()
     snap = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason, "pid": os.getpid(),
-            "uptime_s": round(now - _S.started), "app": _static(), "process": _section(_process),
-            "python_threads": [t.name for t in threading.enumerate()], "os_threads": _os_threads(),
+            "uptime_s": round(now - _S.started), "app": _static(), "process": _section(plat_diag.memory),
+            "python_threads": [t.name for t in threading.enumerate()], "os_threads": plat_diag.thread_names(),
             "ui": dict(_S.cache)}
     snap["ui_heartbeat_age_s"] = round(now - _S.beat, 2) if _S.beat else None
     if win is not None:

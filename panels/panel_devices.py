@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QBoxLayout, QFileDialog, QFrame, QHBoxLayout, QLi
 
 import idevice
 import ipod
+import plat_paths
 from devices import DeviceMonitor, cd_write_problem, expand_sources
 from device_views import DeviceData, DeviceView, Head, folder_rows
 from drive_browser import DriveBrowser
@@ -155,7 +156,7 @@ class DevicesWidget(QWidget):
         self._quiet: set[str] = set()               # devices whose note was put away
         self._ask: dict | None = None
         self._source = None
-        self._dest = Path.home() / "Music"
+        self._dest = plat_paths.music_dir()
         self._started = self._active = self._ready = False
         self._ticks = 0
         self._quiet_until = time.monotonic() + 3

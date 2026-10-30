@@ -18,6 +18,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -28,13 +29,17 @@ import cli_render
 import idevice
 import ipod
 import phone_files
+import plat_fs
+import plat_paths
+import plat_proc
 import sid_player
 from applog import log
 from artists import join_artists, split_artists
 from audio_files import (CHIP_EXTS, FAT_32_FS, Cancelled as _Cancelled, _norm, _numbered, base_renderers,  # noqa: F401
-                         blank_tags, expand_sources as _expand, fat_name, free_path, kill_group, printable, put_artists,
+                         blank_tags, expand_sources as _expand, fat_name, free_path, printable, put_artists,
                          read_mounts, read_tags, run_ffmpeg, run_until_cancel, unique_name)
 from ffmpeg_util import ffmpeg_path
+from plat_proc import kill_tree as kill_group
 from player import AUDIO_EXTS, extract_art
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -532,6 +537,7 @@ def _os_message(e: OSError) -> str:
 def put_file(src: Path, dest: Path, job: _Job):
     """Copy src to dest in chunks, through a hidden partial file, so that cancel is heard, progress is known and
     a cancel or an error never leaves half a song behind. The mtime comes along where the file system allows."""
+    src, dest = Path(plat_fs.fit(src)), Path(plat_fs.fit(dest))
     part = dest.with_name('.' + dest.name + '.part')
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -548,7 +554,7 @@ def put_file(src: Path, dest: Path, job: _Job):
             os.utime(part, ns=(src.stat().st_atime_ns, src.stat().st_mtime_ns))
         except OSError:
             pass
-        os.replace(part, dest)
+        plat_fs.replace(part, dest)
     except OSError as e:
         raise DeviceError(_os_message(e))
     finally:
@@ -567,9 +573,7 @@ def convert_audio(job: _Job, src: Path, out: Path, fmt: str, tags: dict, title: 
     exe = ffmpeg_path()
     if not exe:
         raise DeviceError("ffmpeg is not installed, so files cannot be converted.")
-    args = ffmpeg_args(exe, str(src), str(out), fmt, tags, True, title)
-    if shutil.which('nice'):
-        args = ['nice', '-n', '10'] + args
+    args = plat_proc.low_priority(ffmpeg_args(exe, str(src), str(out), fmt, tags, True, title))
     while not _FFMPEG.acquire(timeout=0.2):
         if job.cancel.is_set():
             raise _Cancelled
@@ -672,7 +676,7 @@ def write_playlist(root: Path, name: str, entries: list) -> Path:
     part = out.with_name('.' + out.name + '.part')
     try:
         part.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        os.replace(part, out)
+        plat_fs.replace(part, out)
     finally:
         part.unlink(missing_ok=True)
     return out
@@ -726,6 +730,9 @@ def flush(path: Path):
     """Write out everything pending for the file system `path` is on, and only that one. Raises DeviceError when
     the device could not take it, which a plain sync would not say."""
     try:
+        if sys.platform == 'win32':
+            plat_fs.flush_volume(path)
+            return
         fd = os.open(path, os.O_RDONLY)
         try:
             if not _syncfs(fd):
@@ -777,7 +784,7 @@ class DeviceMonitor(QObject):
         super().__init__(parent)
         self._backend, self._fixed = backend, backend is not None
         self.mountinfo = mountinfo
-        self.cache_dir = Path(cache_dir or Path.home() / '.cache' / 'audiocrate' / 'devices')
+        self.cache_dir = Path(cache_dir or plat_paths.cache_dir() / 'devices')
         self.renderers = default_renderers()      # extension -> function(path, cancel) -> WAV path
         self._devices: list[Device] = []
         self._entries: dict = {}
@@ -790,7 +797,7 @@ class DeviceMonitor(QObject):
         self._lock = threading.Lock()
         self._pairing: dict = {}
         self._phones: dict = {}
-        self.roots_file = Path(roots_file or Path.home() / '.config' / 'audiocrate' / 'device_roots.json')
+        self.roots_file = Path(roots_file or plat_paths.config_dir() / 'device_roots.json')
         self._roots: dict | None = None            # device id -> the folder to read, '.' for the whole drive
         self._cd_info: dict = {}                  # (drive, media) -> {'free': bytes of room on a blank disc, 'at'}
         self._cd_probing: set = set()

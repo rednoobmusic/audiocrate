@@ -1,7 +1,6 @@
 """Local listening statistics: most-played tracks and artists, and total listening
-time. Off by default (opt-in in Settings). Everything lives in one JSON file under
-~/.config/audiocrate/ and nothing is sent anywhere; this module imports no
-networking library.
+time. Off by default (opt-in in Settings). Everything lives in one JSON file in the
+config folder and nothing is sent anywhere; this module imports no networking library.
 
 Two countings, both fed by the same PlayedThresholdTracker:
  - Total listening time (and each track's own listened_ms) adds every second of
@@ -19,18 +18,19 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+import plat_fs
+import plat_paths
 from artists import split_artists
 from player import Player
 from played_tracker import PlayedThresholdTracker
 from safe_write import write_text
 
-_STATS_FILE = Path.home() / ".config" / "audiocrate" / "play_stats.json"
+_STATS_FILE = plat_paths.config_dir() / "play_stats.json"
 _SAVE_DEBOUNCE_MS = 2000
 
 
@@ -99,7 +99,7 @@ class PlayStatsTracker(QObject):
             from applog import log
             aside = _STATS_FILE.with_name(f"{_STATS_FILE.name}.bad-{time.strftime('%Y%m%d-%H%M%S')}")
             try:
-                os.replace(_STATS_FILE, aside)
+                plat_fs.replace(_STATS_FILE, aside)
             except OSError:
                 aside = _STATS_FILE
             log.warning("the play stats could not be read; the file is kept as %s", aside)

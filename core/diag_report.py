@@ -13,6 +13,8 @@ import time
 import zipfile
 from pathlib import Path
 
+import plat_fs
+
 HIDDEN = "<hidden>"
 
 _KEY = re.compile(r"(token|secret|passw|pwd|api[_-]?key|apikey|api[_-]?sig|session|cookie|auth|credential|private"
@@ -106,5 +108,5 @@ def build_report(dest, snapshot: dict, stacks: str, config_dir: Path, debug_dir:
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for name, text in parts.items():
             z.writestr(name, text)
-    tmp.replace(dest)
+    plat_fs.replace(tmp, dest)
     return dest

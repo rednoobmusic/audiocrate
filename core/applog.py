@@ -1,4 +1,4 @@
-"""App-wide logging: a rotating file at ~/.config/audiocrate/audiocrate.log (INFO and up, three files of 2 MB) and
+"""App-wide logging: a rotating file audiocrate.log in the config folder (INFO and up, three files of 2 MB) and
 stderr (WARNING and up). Every line carries the name of the thread that wrote it. set_detailed(True) lets DEBUG lines
 into the file as well, which Settings, System and AUDIOCRATE_LOG=debug do. Callers use `from applog import log`."""
 from __future__ import annotations
@@ -7,9 +7,11 @@ import collections
 import logging
 import logging.handlers
 import os
-from pathlib import Path
 
-_LOG_FILE = Path.home() / ".config" / "audiocrate" / "audiocrate.log"
+import plat_diag
+import plat_paths
+
+_LOG_FILE = plat_paths.config_dir() / "audiocrate.log"
 _FORMAT = "%(asctime)s %(levelname)-7s [%(threadName)s] %(name)s: %(message)s"
 
 
@@ -67,10 +69,7 @@ def _record(*args, **kw):
     """A thread Qt started and Python met only when it called in has no name (Dummy-3); its OS name is the Qt object name."""
     r = _new_record(*args, **kw)
     if r.threadName.startswith("Dummy-"):
-        try:
-            r.threadName = Path("/proc/thread-self/comm").read_text().strip() or r.threadName
-        except OSError:
-            pass
+        r.threadName = plat_diag.current_thread_name() or r.threadName
     return r
 
 

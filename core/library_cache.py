@@ -13,9 +13,11 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import plat_fs
+import plat_paths
 from artists import join_artists, split_artists
 
-_DB_PATH = Path.home() / ".config" / "audiocrate" / "library.db"
+_DB_PATH = plat_paths.config_dir() / "library.db"
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 _warned_no_mutagen = False
@@ -160,7 +162,7 @@ def get_tags(path: Path) -> dict:
     except OSError:
         return _read_tags(p)
 
-    key = str(p)
+    key = plat_fs.path_key(p)
     with _lock:
         row = _db().execute(
             "SELECT mtime, title, artist, album, duration, artists, albumartist FROM tracks WHERE path=?",
@@ -194,7 +196,7 @@ def get_many(paths: list[Path], read_missing: bool = True) -> dict[Path, dict]:
     stats: dict[str, float] = {}
     for p in paths:
         try:
-            stats[str(p)] = p.stat().st_mtime
+            stats[plat_fs.path_key(p)] = p.stat().st_mtime
         except OSError:
             if read_missing:
                 result[p] = _read_tags(p)   # unreadable: slow path, not cached
@@ -215,7 +217,7 @@ def get_many(paths: list[Path], read_missing: bool = True) -> dict[Path, dict]:
     # mutagen reads only the misses, outside the lock
     fresh: list[tuple] = []
     for p in paths:
-        key = str(p)
+        key = plat_fs.path_key(p)
         if key not in stats:
             continue                    # already handled as unreadable
         row = cached.get(key)
@@ -248,7 +250,7 @@ def remember_duration(path: Path, seconds: float) -> None:
     """
     if seconds is None or seconds <= 0.0:
         return
-    key = str(Path(path))
+    key = plat_fs.path_key(Path(path))
     with _lock:
         db = _db()
         row = db.execute("SELECT duration FROM tracks WHERE path=?", (key,)).fetchone()
@@ -262,7 +264,7 @@ def forget(path: Path):
     """Drop a cached entry, for instance after a file is deleted or renamed."""
     try:
         with _lock:
-            _db().execute("DELETE FROM tracks WHERE path=?", (str(path),))
+            _db().execute("DELETE FROM tracks WHERE path=?", (plat_fs.path_key(path),))
             _db().commit()
     except Exception:
         pass

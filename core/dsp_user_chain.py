@@ -53,6 +53,8 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal
 from scipy.ndimage import maximum_filter1d
 
+import plat_fs
+import plat_paths
 from dsp_base import REGISTRY, Context, create
 
 VERSION = 1
@@ -94,7 +96,7 @@ def load_modules() -> None:
 
 
 def config_dir() -> Path:
-    return Path.home() / ".config" / "audiocrate"
+    return plat_paths.config_dir()
 
 
 def _plain(o):
@@ -110,7 +112,7 @@ def _write_json(path: Path, data) -> None:
             json.dump(data, f, indent=2, default=_plain)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        plat_fs.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -1101,7 +1103,7 @@ class DspChain(QObject):
             self.last_error = "The DSP settings file could not be read (%s). Starting with an empty chain." % e
             _log().warning(self.last_error)
             try:
-                os.replace(p, p.with_name(p.name + ".bad"))
+                plat_fs.replace(p, p.with_name(p.name + ".bad"))
             except OSError:
                 pass
             return [self.last_error]

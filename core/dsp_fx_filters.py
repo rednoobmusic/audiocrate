@@ -28,6 +28,8 @@ import numpy as np
 from scipy import fft as _fft
 from scipy.signal import resample, resample_poly, sosfilt, sosfreqz
 
+import plat_fs
+import plat_proc
 from dsp_base import Context, DspModule, Param, register
 
 _IDENT = np.array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
@@ -417,18 +419,7 @@ class IrError(Exception):
     """A problem with the impulse response file, worded for the person who chose it."""
 
 
-def _free_ram() -> int:
-    try:
-        with open("/proc/meminfo") as fh:
-            for line in fh:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024
-    except (OSError, ValueError, IndexError):
-        pass
-    try:
-        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-    except (ValueError, OSError, AttributeError):
-        return 2 << 30
+_free_ram = plat_fs.free_ram
 
 
 def _cap_seconds(rate: int, ch: int, fs: int, ceiling: float) -> float:
@@ -516,7 +507,8 @@ def _probe_ffmpeg(exe: str, path: str):
     """(rate, channels) from the stream line ffmpeg prints, or the largest case when it cannot be read."""
     try:
         r = subprocess.run([exe, "-hide_banner", "-nostdin", "-i", path], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15,
+                           **plat_proc.popen_kwargs(group=False))
         m = re.search(r"Audio: [^,\n]*, (\d+) Hz, ([^,\n(]*)", r.stderr.decode("utf-8", "replace"))
         if m:
             lay = m.group(2).strip()
@@ -540,7 +532,8 @@ def _read_ffmpeg(path: str, limit):
         out = os.path.join(tmp, "ir.wav")
         cmd = [exe, "-v", "error", "-nostdin", "-i", path, "-vn", "-t", "%.3f" % (seconds + 1.0),
                "-c:a", "pcm_f32le", "-f", "wav", out]
-        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120,
+                           **plat_proc.popen_kwargs(group=False))
         if r.returncode != 0 or not os.path.isfile(out):
             raise IrError("That file could not be read as audio.")
         return _read_wav(out, limit)

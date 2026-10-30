@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
 
 import dsp_base
 import dsp_presets
+import plat_fs
+import plat_paths
 from library_widgets import Scheme, scaled_font
 from mini_eq import MiniEq, handles_of
 from panel_eq import _Flow
@@ -39,7 +41,7 @@ _FILE_EXTS = ("wav", "flac", "ogg", "mp3", "aiff", "aif", "opus", "m4a")
 
 
 def _state_file() -> Path:
-    return Path.home() / ".config" / "audiocrate" / "dsp_ui.json"
+    return plat_paths.config_dir() / "dsp_ui.json"
 
 
 # how a setting maps onto a slider
@@ -1802,7 +1804,7 @@ class DspWidget(QWidget):
             f.parent.mkdir(parents=True, exist_ok=True)
             tmp = f.with_suffix(".tmp")
             tmp.write_text(json.dumps(d), encoding="utf-8")
-            tmp.replace(f)
+            plat_fs.replace(tmp, f)
         except OSError:
             pass
 

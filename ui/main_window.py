@@ -2,8 +2,11 @@ from __future__ import annotations
 import contextlib
 import json
 import base64
+import sys
 import time
 from pathlib import Path
+import plat_fs
+import plat_paths
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QStatusBar, QFileDialog, QWidget,
     QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, QSizePolicy, QApplication, QMenu, QDialog, QTabBar,
@@ -12,7 +15,7 @@ from PySide6.QtCore import Qt, QByteArray, QEvent, Signal, QTimer, QUrl
 from PySide6.QtGui  import QColor, QPainter, QPainterPath, QAction
 from PySide6.QtMultimediaWidgets import QVideoWidget
 
-_STATE_FILE = Path.home() / ".config" / "audiocrate" / "ui_state.json"
+_STATE_FILE = plat_paths.config_dir() / "ui_state.json"
 
 _DEFAULT_LAYOUT = json.loads('{"geometry": "AdnQywADAAAAAAAAAAAAAAAABvkAAARbAAAAAQAAABkAAAb4AAAEWgAAAAACAAAABvoAAAAAAAAAAAAABvkAAARb", "dock_state": "AAAA/wAAAAD9AAAAAgAAAAAAAAN3AAAEJPwCAAAAA/wAAAAiAAAB8QAAANUBAAAb+gAAAAABAAAABvsAAAAYAE8AcwBjAGkAbABsAG8AcwBjAG8AcABlAQAAAAD/////AAAAmAD////7AAAAEABNAGkAbABrAGQAcgBvAHABAAAAAP////8AAACiAP////sAAAAWAE4AbwB3ACAAUABsAGEAeQBpAG4AZwEAAAAA/////wAAAJMA////+wAAAAwATwBuAGwAaQBuAGUBAAAAAP////8AAADKAP////sAAAAOAEQAZQB2AGkAYwBlAHMBAAAAAP////8AAADeAP////sAAAAKAFYAaQBkAGUAbwEAAAAA/////wAAAHIA/////AAAAhkAAAGHAAABhQEAABv6AAAAAAIAAAAC+wAAABIARQBxAHUAYQBsAGkAegBlAHIBAAAAAP////8AAAFpAP////sAAAAGAEQAUwBQAQAAAAD/////AAAApgD////7AAAAEABDAG8AbgB0AHIAbwBsAHMBAAADpgAAAKAAAACgAP///wAAAAEAAAN3AAAEJPwCAAAAA/wAAAAiAAADYAAAAWEBAAAb+gAAAAACAAAAB/sAAAAQAFAAbABhAHkAbABpAHMAdAEAAAAA/////wAAAOoA////+wAAAA4ATABpAGIAcgBhAHIAeQEAAAAA/////wAAAOIA////+wAAABAAUwBlAHQAdABpAG4AZwBzAQAAAAD/////AAAAhwD////7AAAACgBTAHQAYQB0AHMBAAAAAP////8AAAFFAP////sAAAAOAFUAcAAgAE4AZQB4AHQBAAAAAP////8AAACfAP////sAAAAMAEwAeQByAGkAYwBzAQAAAAD/////AAAAKAD////7AAAACABJAG4AZgBvAQAAAAD/////AAAAgAD////7AAAAEgBXAGEAdABlAHIAZgBhAGwAbAEAAAOIAAAAvgAAAEEA////+wAAABAAUwBwAGUAYwB0AHIAdQBtAgAAAMAAAAHzAAADdwAAAL4AAAAAAAAEJAAAAAEAAAACAAAAAQAAAAL8AAAAAA==", "docks": {"Settings": {"geo": "AdnQywADAAD///qV///6x////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6x////gv///4L", "visible": true}, "Playlist": {"geo": "AdnQywADAAAAAAODAAAAIgAABvkAAANlAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAODAAAAIgAABvkAAANl", "visible": true}, "Library": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Stats": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Up Next": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Lyrics": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Info": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Milkdrop": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Now Playing": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Online": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Devices": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Video": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Oscilloscope": {"geo": "AdnQywADAAAAAAAAAAAAIgAAA3YAAAH2AAAAAAAAAAD//////////wAAAAAAAAAABvoAAAAAAAAAIgAAA3YAAAH2", "visible": true}, "Waterfall": {"geo": "AdnQywADAAAAAAODAAADiAAABvkAAARFAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAODAAADiAAABvkAAARF", "visible": true}, "Spectrum": {"geo": "AdnQywADAAAAAADAAAAB8wAABDYAAAKwAAAAwAAAAfMAAAQ2AAACsAAAAAAAAAAABvoAAADAAAAB8wAABDYAAAKw", "visible": false}, "Equalizer": {"geo": "AdnQywADAAAAAAAAAAACGQAAA3YAAAODAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAAAAAACGQAAA3YAAAOD", "visible": true}, "DSP": {"geo": "AdnQywADAAD///1m///9I////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///1m///9I////gv///4L", "visible": true}, "Controls": {"geo": "AdnQywADAAAAAAAAAAADpgAAA3YAAARFAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAAAAAADpgAAA3YAAARF", "visible": true}}}')
 _COMPACT_LAYOUT = json.loads('{"geometry": "AdnQywADAAAAAAABAAAGRwAABcsAAAr4AAAAAQAABkcAAAXLAAAK+AAAAAAAAAAACgAAAAABAAAGRwAABcsAAAr4", "dock_state": "AAAA/wAAAAD9AAAABAAAAAAAAALhAAAEhPwCAAAAAfwAAAAbAAAEhAAAAToA/////AIAAAAD/AAAABsAAAJUAAAAAAD////8AQAAAAH8AAACIAAAAbwAAAAAAP////r/////AgAAAAD7AAAAFgBOAG8AdwAgAFAAbABhAHkAaQBuAGcBAAAAGwAAA3AAAACnAP///vsAAAAQAEMAbwBuAHQAcgBvAGwAcwEAAAOPAAABEAAAAI8A///+AAAAAQAAAuIAAASE/AIAAAAD/AAAABsAAAL3AAAA3QEAABz6AAAAAwEAAAAE+wAAABAAUABsAGEAeQBsAGkAcwB0AQAAAAD/////AAAAsgD////7AAAADgBMAGkAYgByAGEAcgB5AQAAAAD/////AAAA7AD////7AAAACABJAG4AZgBvAQAAAAD/////AAAAbwD////7AAAAEABTAGUAdAB0AGkAbgBnAHMBAAAAAP////8AAACJAP////sAAAAMAEwAeQByAGkAYwBzAQAAAxYAAAGJAAAALwD///78AAACwQAAAd4AAAAAAP////r/////AgAAAAAAAAACAAACkwAAAIz8AQAAAAH7AAAAEABTAHAAZQBjAHQAcgB1AG0AAAABnAAAApMAAACWAP///wAAAAMAAAIaAAAEgPwBAAAAAfsAAAAYAE8AcwBjAGkAbABsAG8AcwBjAG8AcABlAAAAAZwAAAB1AAAApAD///8AAAAAAAAEhAAAAAEAAAACAAAAAQAAAAL8AAAAAA==", "docks": {"Info": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Library": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Playlist": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Lyrics": {"geo": "AdnQywADAAAAAALpAAADFgAABcoAAASeAAAAAAAAAAD//////////wAAAAAAAAAACgAAAALpAAADFgAABcoAAASe", "visible": true}, "Settings": {"geo": "AdnQywADAAAAAALpAAAAGwAABcoAAALzAAAAAAAAAAD//////////wAAAAAAAAAACgAAAALpAAAAGwAABcoAAALz", "visible": true}, "Oscilloscope": {"geo": "AdnQywADAAAAAAGcAAAAGwAAAhAAAASaAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAGcAAAAGwAAAhAAAASa", "visible": false}, "Controls": {"geo": "AdnQywADAAAAAAAAAAADjwAAAuAAAASeAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAADjwAAAuAAAASe", "visible": true}, "Now Playing": {"geo": "AdnQywADAAAAAAAAAAAAGwAAAuAAAAOKAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAAAGwAAAuAAAAOK", "visible": true}, "Spectrum": {"geo": "AdnQywADAAAAAAGcAAAAFwAABC4AAACiAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAGcAAAAFwAABC4AAACi", "visible": false}, "Video": {"geo": "AdnQywADAAAAAAAAAAAAGwAAAuAAAAOKAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAAAGwAAAuAAAAOK", "visible": false}}}')
@@ -307,7 +310,7 @@ from panel_dsp         import DspWidget
 from panel_settings    import SettingsWidget
 import anim
 from artists           import configure as configure_artists
-from mpris             import MPRISService
+from media_session     import make_session
 from discord_rpc       import DiscordRPCService
 from scrobbler         import ScrobbleController
 from play_stats        import PlayStatsTracker
@@ -383,7 +386,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
 
-        self._mpris = MPRISService(self._player, self)
+        self._mpris = make_session(self._player, self)
         self._mpris.open_files.connect(self.open_files)
         self._mpris.remote_changed.connect(self._controls.sync_from_player)
         self._controls._vol.valueChanged.connect(self._mpris.refresh)
@@ -662,8 +665,8 @@ class MainWindow(QMainWindow):
         lib._refresh()
 
     def _on_devices_saved(self, folder):
-        """Songs copied off a device into ~/Music join the library even when the library points elsewhere."""
-        root, lib, music = Path(folder), self._library, Path.home() / "Music"
+        """Songs copied off a device into the Music folder join the library even when the library points elsewhere."""
+        root, lib, music = Path(folder), self._library, plat_paths.music_dir()
         if (root == music or music in root.parents) and not any(root == f or f in root.parents for f in lib._folders):
             lib._folders.append(root)
             lib._save_config()
@@ -752,6 +755,15 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._restore_ui_state)
             # after the layout is restored, so the overlays size to the real window
             QTimer.singleShot(0, self._start_fx)
+            if sys.platform == "win32":
+                QTimer.singleShot(5000, self._warm_converter)
+
+    def _warm_converter(self):
+        """The Convert window lists formats after one probe encode each, with ffmpeg started once per format. A virus
+        scanner makes each start slow on Windows, so the first window would freeze for seconds; this does it early."""
+        import threading
+        import converter
+        threading.Thread(target=converter.formats, daemon=True).start()
 
     def _start_fx(self):
         """Start the visual extras, each on its own so one cannot take the others.
@@ -788,6 +800,10 @@ class MainWindow(QMainWindow):
         shine = getattr(self, "_shine", None)
         if shine is not None:
             shine.start() if msg.rstrip().endswith("\u2026") else shine.stop()
+
+    def _milkdrop_unavailable(self, why: str):
+        QTimer.singleShot(0, self._milkdrop_dock.hide)
+        self._show_status(why, 12000)
 
     def _visuals_shown(self) -> bool:
         viz = getattr(self, "_viz", None)
@@ -1363,6 +1379,7 @@ class MainWindow(QMainWindow):
             self._milkdrop_dock = _make_dock("Milkdrop", self._milkdrop, Qt.BottomDockWidgetArea)
             self.tabifyDockWidget(ctrl_dock, self._milkdrop_dock)
             self._milkdrop_dock.hide()
+            self._milkdrop.unavailable.connect(self._milkdrop_unavailable)
         except Exception as e:
             from applog import log
             log.warning("Milkdrop panel unavailable: %s", e)
@@ -1627,7 +1644,7 @@ class MainWindow(QMainWindow):
         if os.environ.get("AUDIOCRATE_TITLEBAR", "").strip() in ("0", "off", "no"):
             return False
         try:
-            cfg = Path.home() / ".config" / "audiocrate" / "settings.json"
+            cfg = plat_paths.config_dir() / "settings.json"
             return bool(json.loads(cfg.read_text(encoding="utf-8")).get("custom_titlebar", True))
         except Exception:
             return True
@@ -2084,7 +2101,7 @@ class MainWindow(QMainWindow):
             self._last_saved_state = payload
             tmp = _STATE_FILE.with_suffix(".tmp")
             tmp.write_text(payload, encoding="utf-8")
-            tmp.replace(_STATE_FILE)
+            plat_fs.replace(tmp, _STATE_FILE)
         except Exception:
             import traceback; traceback.print_exc()
 
@@ -2263,7 +2280,7 @@ class MainWindow(QMainWindow):
                 self._webremote.stop()
         except Exception: pass
 
-        # Unregister MPRIS D-Bus service before Qt destroys adaptors
+        # Give the media session back; MPRIS unregisters its D-Bus service before Qt destroys adaptors
         try: self._mpris.shutdown()
         except Exception: pass
         try: self._discord.shutdown()

@@ -9,6 +9,8 @@ holds (reverb tails, look-ahead) is written before the sink drains.
 """
 from __future__ import annotations
 import ctypes
+import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -16,8 +18,31 @@ from pathlib import Path
 from PySide6.QtCore import QMetaObject, QObject, Qt, Signal, QTimer
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QAudioDevice, QMediaDevices
 
+import plat_native
+
+
+class _NoGme:
+    """Stands in for libgme when it is not installed. Every file fails to open, so a chiptune is turned down the
+    way a damaged one is, and nothing past the open is reached."""
+
+    class _Call:
+        argtypes = restype = None
+
+        def __call__(self, *args):
+            return b"libgme is not installed"
+
+    def __getattr__(self, name):
+        if not name.startswith("gme_"):
+            raise AttributeError(name)
+        return self._Call()
+
+
 # libgme binding
-_lib = ctypes.CDLL("libgme.so")
+_lib = plat_native.load("libgme.so", "libgme.dll")
+if _lib is None:
+    from applog import log
+    log.warning("libgme was not found, so chiptune files (VGM, NSF, SPC and others) cannot be played")
+    _lib = _NoGme()
 
 _lib.gme_open_file.argtypes  = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_int]
 _lib.gme_open_file.restype   = ctypes.c_char_p
@@ -45,6 +70,44 @@ _lib.gme_tell.restype  = ctypes.c_int
 
 _lib.gme_seek.argtypes = [ctypes.c_void_p, ctypes.c_int]
 _lib.gme_seek.restype  = ctypes.c_char_p
+
+
+def gme_open(lib, name: bytes, emu: ctypes.c_void_p, rate: int):
+    """gme_open_file for the file called name (bytes), None when it opened and libgme's message when it did not.
+    libgme opens a name with fopen, which cannot take the UTF-8 names Windows files have, so Windows reads the file
+    here and hands libgme the bytes."""
+    if sys.platform != "win32" or isinstance(lib, _NoGme):
+        return lib.gme_open_file(name, ctypes.byref(emu), rate)
+    return _open_from_memory(lib, name, emu, rate)
+
+
+def _open_from_memory(lib, name: bytes, emu: ctypes.c_void_p, rate: int):
+    try:
+        with open(os.fsdecode(name), "rb") as f:
+            data = f.read()
+    except OSError as e:
+        return str(e).encode("utf-8", "replace")
+    lib.gme_open_data.argtypes = [ctypes.c_char_p, ctypes.c_long, ctypes.POINTER(ctypes.c_void_p), ctypes.c_int]
+    lib.gme_open_data.restype = ctypes.c_char_p
+    err = lib.gme_open_data(data, len(data), ctypes.byref(emu), rate)
+    if not err:
+        return None
+    # a format with no signature in its header, an old GYM for one, is known by its extension only
+    lib.gme_identify_extension.argtypes, lib.gme_identify_extension.restype = [ctypes.c_char_p], ctypes.c_void_p
+    kind = lib.gme_identify_extension(name)
+    if not kind:
+        return err
+    lib.gme_new_emu.argtypes, lib.gme_new_emu.restype = [ctypes.c_void_p, ctypes.c_int], ctypes.c_void_p
+    lib.gme_load_data.argtypes, lib.gme_load_data.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long], ctypes.c_char_p
+    handle = lib.gme_new_emu(kind, rate)
+    if not handle:
+        return err
+    msg = lib.gme_load_data(handle, data, len(data))
+    if msg:
+        lib.gme_delete(handle)
+        return msg
+    emu.value = handle
+    return None
 
 # matches gme_info_t from gme.h (libgme 0.6.x)
 class _GmeInfo(ctypes.Structure):
@@ -112,7 +175,7 @@ def _make_format(rate: int = _SAMPLE_RATE) -> QAudioFormat:
 def gme_tags(path: Path) -> dict:
     """Chiptune metadata via libgme (song/author/system/game/copyright/comment + track count)."""
     emu = ctypes.c_void_p()
-    if _lib.gme_open_file(str(path).encode(), ctypes.byref(emu), _SAMPLE_RATE):
+    if gme_open(_lib, str(path).encode(), emu, _SAMPLE_RATE):
         return {}
     out = {"track_count": _lib.gme_track_count(emu)}
     try:
@@ -235,7 +298,7 @@ class VgmPlayer(QObject):
         self._stage_failed = False
         self._rate = self._stage_rate() or _SAMPLE_RATE
         emu = ctypes.c_void_p()
-        err = _lib.gme_open_file(str(path).encode(), ctypes.byref(emu), self._rate)
+        err = gme_open(_lib, str(path).encode(), emu, self._rate)
         if err:
             return False
         with self._emu_lock:
@@ -466,7 +529,7 @@ class VgmPlayer(QObject):
         path, track, rate = key
         emu = ctypes.c_void_p()
         with self._emu_lock:
-            if _lib.gme_open_file(path.encode(), ctypes.byref(emu), rate):
+            if gme_open(_lib, path.encode(), emu, rate):
                 return None
         parts, got = [], 0
         try:
