@@ -1,4 +1,6 @@
-dist/
-build/
 __pycache__/
 *.pyc
+dist/
+build/
+*.so
+webremote-ui/node_modules/

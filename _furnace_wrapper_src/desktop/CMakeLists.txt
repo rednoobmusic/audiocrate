@@ -49,7 +49,7 @@ target_link_libraries(furnace_wrap PRIVATE
     m
 )
 
-# Install next to audiocrate
-set(AUDIOCRATE_DIR "/home/rednoobmusic/Documents/pythons/audiocrate"
-    CACHE PATH "Target directory to install the .so into")
+# Install next to main.py, which is two folders up from here
+set(AUDIOCRATE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+    CACHE PATH "Folder to install the .so into, the one that holds main.py")
 install(TARGETS furnace_wrap DESTINATION "${AUDIOCRATE_DIR}")

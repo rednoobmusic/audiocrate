@@ -1,10 +1,17 @@
 # AudioCrate
 
-A desktop music player that plays chiptune formats natively. Furnace modules,
-VGM, NSF, SPC, tracker modules and AY/YM files get the same waveform, seeking,
-EQ and visualizers as an MP3 or FLAC.
+A music player for Linux and Windows. It plays everything ffmpeg can decode, and
+it plays chiptune formats directly: Furnace modules, SID, VGM, NSF, SPC, tracker
+modules and AY/YM files. Those get the same waveform, seeking, equalizer and
+visualizers as an MP3 or FLAC.
 
-Written in Python with PySide6 (Qt 6). Linux only. Windows and macOS are untested.
+![The AudioCrate main window, on sample songs](https://audiocrate.net/assets/img/ui-main-1800.webp)
+
+Written in Python with PySide6 (Qt 6). Linux is the version that has had the most
+use. The Windows version is a preview, and there is no macOS version. The
+downloads, more screenshots and a short video are at
+[audiocrate.net](https://audiocrate.net), and the zips are on the
+[releases page](https://github.com/rednoobmusic/audiocrate/releases).
 
 ## Features
 
@@ -149,6 +156,18 @@ a Files tab that shows its media folders and the folders of apps that share
 files, and you can copy files off it or songs into an app's folder. iOS does not
 let other programs add to the Music app, so that direction is not offered.
 
+A CD or DVD drive is listed with a disc in it or without one, and its eject
+button opens the tray. An audio CD opens as one file per track, which you can
+play, add to the playlist or copy off as WAV files. A data disc is a read only
+volume. A blank CD-R or DVD+R can be written with Copy music, in a single session
+with xorriso, and because a disc can only be written once, AudioCrate asks first.
+The disc features are new and have so far been tried only with test data and a
+stand-in drive.
+
+The Folders view of a drive reads one folder at a time as you open it, so a big
+drive shows up at once and nothing is indexed. Songs, Albums and Artists read the
+whole drive, and on a drive over 32 GB they ask which folder to read first.
+
 ### Converting files
 
 File, Convert files opens a window where you add files or folders (or drop them
@@ -212,6 +231,18 @@ one string is split: at commas, at ampersands and, if you turn it on, at slashes
 (older ID3v2.3 tags put a slash between artists). A list of exceptions keeps names
 such as AC/DC and Earth, Wind & Fire whole.
 
+## Install (Windows)
+
+Download `AudioCrate-<version>-win64.zip` from the releases page, unpack it
+somewhere you can write to and run `AudioCrate.exe`. Nothing is installed. It
+needs Windows 10 (22H2) or Windows 11, 64 bit. The program is not signed, so
+Windows may say it protected your PC: choose More info, then Run anyway. The
+`.sha256` file next to the zip is for checking the download.
+
+The Windows version is a preview. It has been built and tested under Wine and not
+yet on many real PCs, and the Devices and Online panels are not finished on it.
+`packaging/windows` describes how the zip is made.
+
 ## Install (Linux)
 
 From a release zip:
@@ -246,7 +277,8 @@ licence; they pull in `typing_extensions`, PSF-2.0). `requirements.txt` lists th
 
 For Online: `yt-dlp` and a JavaScript runtime (`deno`; yt-dlp also accepts `node` 22 or newer), and
 `gallery-dl` if you want X profiles. For Devices: `udisks2` with `busctl`, which comes with systemd (finding drives,
-mounting and eject), `libgpod` (iPod databases), `libimobiledevice` and `gvfs` (iPhone and iPad).
+mounting and eject), `libgpod` (iPod databases), `libimobiledevice` and `gvfs` (iPhone and iPad). `gvfs`
+also opens audio CDs, and `xorriso` writes blank discs.
 
 For exact SID song lengths, put an HVSC `Songlengths.md5` at
 `~/.config/audiocrate/Songlengths.md5` (also found automatically at
@@ -308,6 +340,7 @@ The files go to `~/.config/audiocrate/debug/` and the newest ten of each kind
 are kept.
 
 - `kill -USR1 PID` writes the stack of every Python thread to `stacks-PID-TIME.txt`.
+  Send one signal and wait for the file. Several in quick succession can crash a busy player.
 - `kill -USR2 PID` writes a state snapshot to `snapshot-PID-TIME.json`: versions, memory, threads, the
   audio engine (device, queue, underruns, feed timing), the player, the DSP chain, panels and the last
   300 log lines. Both signals work while the window is frozen.
@@ -333,7 +366,14 @@ are kept.
 packaging/make_release.sh          # → dist/release/audiocrate-<version>-linux.zip
 ```
 
-The version is set in `core/_version.py`.
+The version and the build number are set in `core/_version.py`. The Windows zip is
+described in `packaging/windows`.
+
+## Reporting a problem
+
+Open an issue. Help, Diagnostics, Save report writes a zip with the logs, the
+versions and your settings, with tokens, secrets and cookies removed, and that is
+the most useful thing to attach.
 
 ## License
 

@@ -7,8 +7,8 @@ pkgver=1.7.0       # keep in sync with core/_version.py
 pkgrel=1
 pkgdesc="Audio player with live DSP, parametric EQ, visualizers and chiptune support"
 arch=('any')
-url="https://rednoobmusic.com"
-license=('custom')
+url="https://audiocrate.net"
+license=('GPL-2.0-or-later')
 depends=('python' 'pyside6' 'python-numpy' 'python-scipy' 'python-mutagen'
          'python-pillow' 'ffmpeg')
 optdepends=('libgme: VGM/VGZ chiptune playback'
@@ -16,6 +16,8 @@ optdepends=('libgme: VGM/VGZ chiptune playback'
             'yt-dlp: the Online panel'
             'deno: the JavaScript runtime yt-dlp needs for YouTube'
             'udisks2: mounting and ejecting drives in the Devices panel'
+            'gvfs: audio CDs and iPhones in the Devices panel'
+            'libisoburn: writing music to blank discs'
             'libgpod: writing the database of an iPod')
 options=('!strip')
 
@@ -24,8 +26,7 @@ package() {
     local root="$startdir/.."
     local dst="$pkgdir/usr/lib/audiocrate"
     install -dm755 "$dst"
-    # panels/ also holds local working trees (panels/myfurnace) that must never
-    # be packaged, so only its .py files are copied
+    # panels/ also holds working folders next to the modules, so only its .py files are copied
     cp -r "$root"/main.py "$root"/_bootstrap.py \
           "$root"/core "$root"/integrations "$root"/ui \
           "$root"/JetBrainsMono "$root"/icon.png \
