@@ -1,6 +1,26 @@
 # AudioCrate changelog
 
-## Unreleased
+## 1.7.0 (2026-10-30)
+
+### Added
+- CD and DVD drives show up in the Devices panel, with a disc in them or without one. With no disc, the page has a Close tray button and the eject button opens the tray. An audio CD opens through GVFS (the gvfs package on most systems) as one Track N.wav file per track. You can play the tracks, add them to the playlist, or copy them to a folder, which rips a track to a WAV file. A data CD or DVD shows up as a read only volume, and nothing can be copied onto it. This is new and has so far been tried only with test data and a stand-in drive, so reports of discs or drives that do not work are welcome.
+- A blank CD-R or DVD+R can be written. The Devices panel shows how much room it has, and Copy music writes the songs into a Music folder in a single session with xorriso (the libisoburn package). A disc can only be written once, so the question says so, and a disc that already has something on it is left alone. This has been tested against a file and a stand-in drive, not yet on a real disc.
+- The Folders view of a drive or disc is now a folder browser that reads one folder at a time as you open it. A drive of any size shows its top folders at once and nothing is indexed. Double click plays a song or opens a folder, and Play and Add to playlist take a song, several songs or a whole folder, up to 5,000 songs at a time. Songs, Albums and Artists still read the whole drive. On a drive over 32 GB they first ask which folder to read, and the drive's menu changes that choice or reads everything.
+
+### Changed
+- A new install opens with a different layout. The top left is one tab group with Oscilloscope, Milkdrop, Now Playing, Online, Devices and Video, then the equalizer and DSP, then the controls. The playlist, library, settings, stats, up next, lyrics and info are tabs at the top right with the waterfall under them, and the window starts maximized. A screen shorter than about 980 px, such as a 768 line laptop, gets the previous compact layout instead, because the new one needs that much height. A layout you have already saved is not touched.
+
+## 1.6.1 (2026-10-29)
+
+### Fixed
+- Album art showed the wrong picture. A file with several pictures showed the first one, which is often the back cover. It now shows the front cover, then any picture with no type, and a back cover or booklet page only when nothing else is there. WMA files had no art at all and now show it, and so do Monkey's Audio and WavPack files with a "Cover Art (Front)" tag. A picture in the song's folder is used only if its name says it is a cover, such as cover, folder, front or album art, and the small thumbnails Windows Media Player leaves come last. Before, any picture in the folder counted, so a folder of downloads gave every song in it the same wallpaper.
+- Skipping quickly through songs could leave the previous song's cover in Now Playing or the Spectrum panel, when its picture arrived after the next song's.
+- CPU use with nothing playing. The Waterfall redrew itself sixty times a second, and the window and panel behind it with it, and the Spectrum panel kept drawing its resting bars. Both now draw only when something moves.
+- The Online panel no longer opens a new install with a warning about the JavaScript runtime or an old yt-dlp. The notes appear when you first search or open a link.
+- A new install opened on the Settings tab. It now opens on the Playlist.
+- Memory. The next song was decoded as soon as the current one started, so the player held two decoded songs for nearly the whole of every song, and an hour long mix meant hundreds of megabytes more. It is now decoded a minute before the current song ends, or at once when the song is shorter than that or its length is not known yet. That roughly halves what playback holds. A seek or a pause moves the moment, and gapless playback is unchanged.
+
+## 1.6.0 (2026-10-27)
 
 ### Added
 - Keep the output open (Settings, Output device). Playback used to close its stream in the sound server on every stop,

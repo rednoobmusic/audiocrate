@@ -472,9 +472,13 @@ class NowPlayingWidget(QWidget):
         data = extract_art(path)
         img = decode_art(data) if data else None
         if _qt_valid(self):
-            self._art_ready.emit(img)
+            self._art_ready.emit((path, img))
 
-    def _apply_art(self, img):
+    def _apply_art(self, got):
+        path, img = got
+        cur = self._player.current
+        if cur is None or cur.path != path:
+            return                  # a slow read for a song already skipped must not cover the one playing now
         self._art.set_pixmap(QPixmap.fromImage(img) if img is not None else None)
         anim.release(self._art)
 

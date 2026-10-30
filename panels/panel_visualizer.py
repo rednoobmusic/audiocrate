@@ -73,6 +73,8 @@ class VisualizerWidget(QWidget):
 
     def __init__(self, analyzer: Analyzer, player: Player, parent=None):
         super().__init__(parent)
+        self.setAttribute(Qt.WA_OpaquePaintEvent)     # paintEvent fills the whole widget
+        self._rested = False                       # the last frame drawn was the one for silence
         self._analyzer = analyzer
         self._player   = player
         self._art: QPixmap | None = None
@@ -130,9 +132,13 @@ class VisualizerWidget(QWidget):
 
     def _load_art(self, path):
         data = extract_art(path)
-        self._art_ready.emit(decode_art(data) if data else None)
+        self._art_ready.emit((path, decode_art(data) if data else None))
 
-    def _apply_art(self, img):
+    def _apply_art(self, got):
+        path, img = got
+        cur = self._player.current
+        if cur is None or cur.path != path:
+            return                  # a slow read for a song already skipped
         self._art = QPixmap.fromImage(img) if img is not None else None
         self._art_scaled = None
         self._art_scaled_key = None
@@ -154,7 +160,16 @@ class VisualizerWidget(QWidget):
             self._analyzer.update(self._player.position_ms, self._player.is_playing)
         self._lerp1.step()
         self._lerp2.step()
+        rest = self._at_rest()
+        if rest and self._rested:
+            return                  # nothing plays and the bars have fallen: the frame on screen is the frame
+        self._rested = rest
         self.update()
+
+    def _at_rest(self) -> bool:
+        a, gain = self._analyzer, self._cfg.fft_gain / 100.0
+        return (not self._player.is_playing and not self._lerp1.animating and not self._lerp2.animating
+                and float(a.bands.max()) * gain < 0.003 and float(a.peaks.max()) * gain <= self._cfg.peak_thresh)
 
     def set_accent(self, palette: dict | None):
         if palette:

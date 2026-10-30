@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (QBoxLayout, QFileDialog, QFrame, QHBoxLayout, QLi
 
 import idevice
 import ipod
-from devices import DeviceMonitor, expand_sources
+from devices import DeviceMonitor, cd_write_problem, expand_sources
 from device_views import DeviceData, DeviceView, Head, folder_rows
+from drive_browser import DriveBrowser
 from device_widgets import (CARD_W, Background, Banner, ConfirmBar, DeviceCard, IconButton, JobStrip, StateView,
-                            plural)
+                            fmt_size, plural)
 from library_widgets import PillButton, ProgressLine, Scheme, Segmented, StatusLine, draw_glyph
 from phone_files_view import PhoneFilesView
 from player import AUDIO_EXTS
@@ -30,6 +31,7 @@ MODES = {
              ("files", "Files")],
     "usb": [("files", "Folders"), ("songs", "Songs"), ("albums", "Albums"), ("artists", "Artists")],
     "iphone": [("songs", "Music"), ("folders", "Folders"), ("files", "Files")],
+    "cd": [("songs", "Songs"), ("files", "Folders")],
 }
 PHONE_MUSIC = "iTunes_Control/Music"
 VERBS = {"copy_to": ("Copying to", "Copied to", "Could not copy to", "Stopped copying to"),
@@ -37,18 +39,24 @@ VERBS = {"copy_to": ("Copying to", "Copied to", "Could not copy to", "Stopped co
          "mount": ("Opening", "Opened", "Could not open", "Stopped opening"),
          "unmount": ("Unmounting", "Unmounted", "Could not unmount", "Stopped unmounting"),
          "eject": ("Ejecting", "Ejected", "Could not eject", "Stopped ejecting"),
+         "burn": ("Writing to", "Wrote to", "Could not write to", "Stopped writing to"),
+         "close_tray": ("Closing the tray of", "Closed the tray of", "Could not close the tray of", "Stopped closing the tray of"),
          "restore": ("Restoring", "Restored", "Could not restore", "Stopped restoring")}
 KEEP = {"copy_to": 20, "copy_from": 20, "eject": 12}        # seconds a finished job stays in the strip
 PHONE_TITLES = {"unpaired": "{} does not trust this computer yet", "waiting": "Tap Trust on the {}",
                 "locked": "The {} is locked", "denied": "Trust was declined", "failed": "Pairing did not work",
                 "no_device": "The {} is not connected"}
 RUNNING = ("queued", "running")
+BROWSE = True                      # a drive's Folders view is a browser that reads one folder at a time, not a scan
+BIG_DRIVE = 32 * 10 ** 9           # a drive bigger than this asks which folder to read before it reads anything
 
 
 def receive_problem(dev) -> str:
     """Why music cannot be copied onto this device, or '' when it can."""
     if dev.kind == "iphone":
         return "iOS does not let other programs add music to the Music app."
+    if dev.kind == "cd":
+        return cd_write_problem(dev) if dev.details.get("blank") else "A disc is read only, so nothing can be copied onto it."
     if dev.details.get("locked"):
         return "This drive is encrypted. Open it in your file manager first."
     if dev.mounted and dev.read_only:
@@ -132,6 +140,7 @@ class DevicesWidget(QWidget):
         self._mode_of: dict[str, str] = {}          # device id -> the view chosen for it
         self._sub: dict[str, str] = {}              # iPhone id -> the media folder opened, '' for the top
         self._phone_views: dict[str, PhoneFilesView] = {}   # iPhone id -> its Files view, made when first asked for
+        self._browsers: dict[str, DriveBrowser] = {}         # drive id -> its folder browser, made when first shown
         self._sets: dict[tuple, DeviceData] = {}    # (device id, subpath) -> that scan, indexed
         self._asked: dict[int, tuple] = {}          # request id -> its (device id, subpath)
         self._pending: dict[tuple, int] = {}
@@ -461,6 +470,8 @@ class DevicesWidget(QWidget):
             self._stale(dev.id)
             if dev.id in self._phone_views and self._mode(dev) == "files":
                 self._phone_views[dev.id].refresh()
+            if dev.id in self._browsers:
+                self._browsers[dev.id].refresh()
             self._show_detail()
 
     def shutdown(self):
@@ -579,6 +590,10 @@ class DevicesWidget(QWidget):
             view.shutdown()
             self._pages.removeWidget(view)
             view.deleteLater()
+        browser = self._browsers.pop(ident, None)
+        if browser is not None:
+            self._pages.removeWidget(browser)
+            browser.deleteLater()
 
     def _stale(self, ident: str):
         """Read a device again but keep what is on screen until the new rows are in, as after a copy."""
@@ -626,10 +641,32 @@ class DevicesWidget(QWidget):
             return "pair", glyph, title, d.get("message", ""), "Pair"
         if d.get("locked"):
             return "locked", "lock", "This drive is encrypted", "Open it in your file manager first, then it shows up here.", ""
+        if dev.kind == "cd" and not d.get("media"):
+            if self._busy_text(dev.id):
+                return "mounting", glyph, "Reading the disc", "", ""
+            return "tray", glyph, "No disc in the drive", "Put a disc in the tray, or close the tray if it is open.", "Close tray"
+        if dev.kind == "cd" and not d.get("usable"):
+            if d.get("blank"):
+                if d.get("writable"):
+                    return "blank", glyph, "This disc is blank", f"It has room for {fmt_size(d['free_bytes'])}. Copy music to write it. A disc can be written only once.", "Copy music"
+                why = cd_write_problem(dev)
+                return "nodata", glyph, "This disc is blank", why or "There is nothing on it.", ""
+            return "nodata", glyph, "AudioCrate cannot read this disc", "It has no audio tracks and no files it can open.", ""
+        if dev.kind == "cd" and not dev.mounted:
+            if busy:
+                return "mounting", glyph, "Reading the disc", "", ""
+            title = "There is an audio CD in the drive" if d.get("audio") else "There is a disc in the drive"
+            tracks = f"{plural(d['tracks'], 'track')}. " if d.get("audio") and d.get("tracks") else ""
+            return "mount", glyph, title, tracks + "Open it to see what is on it.", "Open"
         if not dev.mounted:
             if busy:
                 return "mounting", glyph, f"Opening {dev.name}", "", ""
             return "mount", glyph, f"{dev.name} is not mounted", "Mount it to see what is on it.", "Mount"
+        if (dev.kind == "usb" and dev.capacity > BIG_DRIVE and not (BROWSE and self._mode(dev) == "files")
+                and getattr(self._mon, "root", lambda _: "")(dev.id) is None):
+            return ("root", glyph, f"{dev.name} holds {fmt_size(dev.capacity)}",
+                    "Choose the folder with your music and only that folder is read. Reading a whole drive of this size takes a long time.",
+                    "Choose folder")
         return None
 
     def _show_detail(self):
@@ -652,6 +689,10 @@ class DevicesWidget(QWidget):
             busy = gate[0] in ("mounting", "pair-wait")
         elif dev.kind == "iphone" and self._mode(dev) == "files":
             self._show_files(dev)
+            self._after_page(dev)
+            return
+        elif BROWSE and dev.kind in ("usb", "cd") and self._mode(dev) == "files":
+            self._show_browser(dev)           # folders are read as they are opened, so a big drive shows at once
             self._after_page(dev)
             return
         else:
@@ -683,6 +724,20 @@ class DevicesWidget(QWidget):
                 busy = True
         self._progress.set(-1 if busy and self._active else None)
         self._after_page(dev)
+
+    def _show_browser(self, dev):
+        """The Folders view of a drive or disc: a browser that reads one folder at a time, not a scan of everything."""
+        view = self._browsers.get(dev.id)
+        if view is None:
+            view = self._browsers[dev.id] = DriveBrowser()
+            view.add_to_playlist.connect(self.add_to_playlist)
+            view.play_now.connect(self.play_now)
+            view.status.connect(lambda text: self.status.emit(text, 6000))
+            self._pages.addWidget(view)
+        view.set_root(dev.mount)
+        self._page = ("files", dev.id)
+        self._pages.setCurrentWidget(view)
+        self._progress.set(None)
 
     def _show_files(self, dev):
         """The Files view of an open iPhone: its media area and the file sharing folder of every app."""
@@ -727,7 +782,7 @@ class DevicesWidget(QWidget):
             tools = self._mon.tools()
         except Exception:
             tools = {}
-        hint = "Plug in a USB stick, SD card, external drive, iPod or iPhone and it shows up here."
+        hint = "Plug in a USB stick, SD card, external drive, CD drive, iPod or iPhone and it shows up here."
         if tools.get("udisks") == "mounts":
             hint += " Drives are found only when they are already mounted, because UDisks2 is not running."
         if tools and not tools.get("idevice", True):
@@ -758,7 +813,8 @@ class DevicesWidget(QWidget):
         self._drop.updateGeometry()
         self._crumb.setVisible(dev.kind == "iphone" and bool(self._sub.get(dev.id)) and self._page[0] != "files")
         self._search.setEnabled(self._page[0] == "list")
-        self._search.setPlaceholderText("Filter in the list below" if self._page[0] == "files" else "Search this device")
+        self._search.setPlaceholderText(("Filter in the list below" if dev.kind == "iphone" else "Search works in the other views")
+                                        if self._page[0] == "files" else "Search this device")
         w = self.width() - (CARD_W if self.width() >= WIDE else 0)
         self._head.place(w, self.height())
         d, text, kind = dev.details, "", "info"
@@ -936,6 +992,12 @@ class DevicesWidget(QWidget):
             return
         if kind in ("mount", "open", "pair"):
             self._mon.mount(dev.id)
+        elif kind == "tray":
+            self._mon.close_tray(dev.id)
+        elif kind == "blank":
+            self._copy_to_menu()
+        elif kind == "root":
+            self._choose_root(dev)
         elif kind == "pair-wait":
             for j in self._jobs.values():
                 if j.get("device") == dev.id and j["state"] in RUNNING and j.get("kind") == "mount":
@@ -1086,7 +1148,10 @@ class DevicesWidget(QWidget):
             return
         songs, d = plural(n, "song"), dev.details
         library = dev.kind == "ipod" and d.get("can_write") and not d.get("rockbox")
-        if not dev.mounted:
+        if dev.kind == "cd":
+            text = (f"Write {songs} to the disc? A disc can be written only once, and stopping part way spoils it. "
+                    "The songs go into a Music folder.")
+        elif not dev.mounted:
             text = f"{dev.name} is not mounted. Mount it and copy {songs}?"
         elif library:
             text = f"Add {songs} to the library of {dev.name}? A backup of its library is made first."
@@ -1105,7 +1170,7 @@ class DevicesWidget(QWidget):
         others = [x for x in self._devs if not receive_problem(x)]
         choices = [(x.id, x.name) for x in others] if choose and len(others) > 1 else []
         self._ask = {"kind": "copy", "device": dev.id, "paths": paths, "playlist": playlist}
-        self._confirm.ask(text, "Copy", profiles if len(profiles) > 1 else None, "auto", choices, dev.id)
+        self._confirm.ask(text, "Write" if dev.kind == "cd" else "Copy", profiles if len(profiles) > 1 else None, "auto", choices, dev.id)
         self._chrome()
 
     def _accepted(self):
@@ -1120,7 +1185,7 @@ class DevicesWidget(QWidget):
                 self.status.emit("That device is not connected any more.", 5000)
                 return
             profile = self._confirm.value("profile") or "auto"
-            if not dev.mounted:
+            if not dev.mounted and dev.kind != "cd":
                 self._after_mount[dev.id] = (ask["paths"], profile, ask["playlist"])
                 self._mon.mount(dev.id)
             else:
@@ -1183,6 +1248,24 @@ class DevicesWidget(QWidget):
                           "They stop playing once it is ejected.", "Eject anyway")
         self._chrome()
 
+    def _choose_root(self, dev):
+        """Pick the one folder of a drive whose songs are read, instead of every folder on it."""
+        start = dev.mount / (self._mon.root(dev.id) or "") if self._mon.root(dev.id) not in (None, ".") else dev.mount
+        d = QFileDialog.getExistingDirectory(self, f"The folder with the music on {dev.name}", str(start))
+        if not d:
+            return
+        try:
+            rel = Path(d).resolve().relative_to(dev.mount.resolve())
+        except ValueError:
+            self.status.emit(f"That folder is not on {dev.name}.", 5000)
+            return
+        self._set_root(dev, str(rel) if str(rel) != "" else ".")
+
+    def _set_root(self, dev, rel):
+        self._mon.set_root(dev.id, rel)
+        self._forget(dev.id)
+        self._show_detail()
+
     def _device_menu(self, ident, pos):
         dev = self._by_id(ident)
         if dev is None:
@@ -1194,6 +1277,14 @@ class DevicesWidget(QWidget):
         if dev.mounted and dev.kind != "iphone":
             menu.addAction("\U000f0338  Unmount", lambda: self._mon.unmount(dev.id)).setEnabled(
                 not self._busy_text(dev.id))
+        if dev.mounted and dev.kind == "usb" and hasattr(self._mon, "root"):
+            cur = self._mon.root(dev.id)
+            menu.addAction("\U000f024b  " + ("Music folder: " + cur if cur not in (None, ".") else "Choose the music folder") + "\u2026",
+                           lambda: self._choose_root(dev))
+            if cur != ".":
+                menu.addAction("\U000f024b  Read the whole drive", lambda: self._set_root(dev, "."))
+        if dev.kind == "cd" and not dev.details.get("media"):
+            menu.addAction("\U000f0770  Close tray", lambda: self._mon.close_tray(dev.id))
         if dev.kind != "iphone" or dev.mounted:
             menu.addAction("\U000f01ea  Eject", lambda: self._eject(dev.id))
         menu.addSeparator()

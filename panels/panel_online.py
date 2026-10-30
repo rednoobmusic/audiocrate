@@ -315,6 +315,7 @@ class OnlineWidget(QWidget):
         self._suspended = False
         self._built = False
         self._woke = False                   # set when the panel is first shown, which is when the tools are looked at
+        self._tools_due = False              # set at the first search or link: the notes about the tools wait until then
         self._provider = PROVIDERS["youtube"]
         self._mode = "audio"
         self._chip = "search"
@@ -944,7 +945,14 @@ class OnlineWidget(QWidget):
 
     # asking
 
+    def _first_ask(self):
+        if not self._tools_due:
+            self._tools_due = True
+            self._tools_banner()
+
     def _submit(self, text: str):
+        if text:
+            self._first_ask()
         if not text:
             if self._chip not in ("search", "songs", "link"):
                 self._browse(self._chip)
@@ -984,6 +992,7 @@ class OnlineWidget(QWidget):
         """Open a link: a video, a playlist, a channel, a post. then is show, play or add."""
         if not url or not self._gate(lambda: self._open(url, then, keep_stack)):
             return
+        self._first_ask()
         target = link_target(url) if then == "show" else None
         if target is not None:                       # a YouTube channel or playlist, or an @handle, opens as a page
             self._set_text(url)
@@ -1765,6 +1774,8 @@ class OnlineWidget(QWidget):
         key = msg = btn = ""
         if not y.get("ok"):
             key, msg, btn = "ytdlp", "yt-dlp was not found, so links cannot be opened.", "Get it"
+        elif not self._tools_due:
+            pass                             # a fresh install shows no warning about a feature nobody has used yet
         elif y.get("stale"):
             key, msg, btn = "stale", f"yt-dlp is {y.get('age_days')} days old. Updating often fixes broken links.", "Update"
         elif self._provider.id == "youtube" and not js.get("ok"):

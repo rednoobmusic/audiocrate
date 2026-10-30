@@ -96,6 +96,9 @@ AUDIO_EXTS = (_FFMPEG_AUDIO_EXTS
 PLAYABLE_EXTS = AUDIO_EXTS | VIDEO_EXTS
 
 
+_PRELOAD_LEAD_S = 60        # the next song is decoded this many seconds before the current one ends
+
+
 class PlayMode:
     SEQUENTIAL = 0
     REPEAT_ALL = 1
@@ -108,8 +111,25 @@ MODE_NAMES = {
 }
 
 
+# Names that mean a cover, best first. A folder of loose downloads or a Windows Media Player folder holds other pictures and
+# thumbnails too; an image that is not named like one of these is never taken for the cover.
 _COVER_STEMS = ("cover", "folder", "front", "albumart", "album", "artwork", "art", "thumb")
 _COVER_EXTS  = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+_COVER_SMALL = ("small", "thumb", "icon")        # Windows Media Player writes AlbumArtSmall.jpg and AlbumArt_{id}_Small.jpg
+
+
+def _cover_rank(p: Path):
+    """Sort key of an image next to a track, or None when its name says it is not a cover."""
+    stem = p.stem.lower()
+    for i, name in enumerate(_COVER_STEMS):
+        if stem == name or (stem.startswith(name) and not stem[len(name)].isalpha()) or (name == "albumart" and stem.startswith(name)):
+            small = any(s in stem for s in _COVER_SMALL)
+            try:
+                size = p.stat().st_size
+            except OSError:
+                size = 0
+            return (small, i, -size, stem)
+    return None
 
 # Several panels (now-playing, visualizer, palette theming, metadata) ask for the
 # same track's art on every track change, so it is cached: the file is opened and
@@ -135,18 +155,11 @@ def _folder_cover(path: Path) -> bytes | None:
                 _FOLDER_COVER_CACHE.move_to_end(key)
                 pick = _FOLDER_COVER_CACHE[key]
                 return pick.read_bytes() if pick is not None else None
-        named, any_img = [], []
+        ranked = []
         for p in folder.iterdir():
-            if p.is_file() and p.suffix.lower() in _COVER_EXTS:
-                any_img.append(p)
-                stem = p.stem.lower()
-                if stem in _COVER_STEMS or "cover" in stem or "folder" in stem or "front" in stem:
-                    named.append(p)
-        candidates = named or any_img
-        pick = None
-        if candidates:
-            candidates.sort(key=lambda p: (len(p.name), p.name.lower()))
-            pick = candidates[0]
+            if p.suffix.lower() in _COVER_EXTS and p.is_file() and (r := _cover_rank(p)) is not None:
+                ranked.append((r, p))
+        pick = min(ranked, key=lambda x: x[0])[1] if ranked else None
         with _ART_LOCK:
             _FOLDER_COVER_CACHE[key] = pick
             while len(_FOLDER_COVER_CACHE) > _FOLDER_COVER_MAX:
@@ -228,6 +241,31 @@ def extract_art(path: Path) -> bytes | None:
     return data
 
 
+def _front(pictures):
+    """The picture to show out of [(type, bytes)]: the front cover when there is one, then an untyped one, and a back
+    cover, a booklet page or a photo of the band only when nothing else is there. Files often store the back cover first."""
+    pictures = [(t, d) for t, d in pictures if d]
+    if not pictures:
+        return None
+    return min(enumerate(pictures), key=lambda x: (0 if x[1][0] == 3 else 1 if x[1][0] in (0, 1, 2) else 2, x[0]))[1][1]
+
+
+def _wm_picture(raw: bytes):
+    """(type, image bytes) from the WM_PICTURE structure a WMA file stores: type, size, mime and description in UTF-16, image."""
+    try:
+        kind = raw[0]
+        size = int.from_bytes(raw[1:5], "little")
+        i = 5
+        for _ in range(2):                                   # mime type, then description, each ended by a UTF-16 NUL
+            while i + 1 < len(raw) and raw[i:i + 2] != b"\0\0":
+                i += 2
+            i += 2
+        data = bytes(raw[i:i + size])
+        return kind, data
+    except (IndexError, ValueError):
+        return 0, b""
+
+
 def _extract_art_uncached(path: Path) -> bytes | None:
     try:
         import base64
@@ -238,15 +276,15 @@ def _extract_art_uncached(path: Path) -> bytes | None:
             return _folder_cover(path)
 
         if hasattr(f, "pictures") and f.pictures:
-            return f.pictures[0].data
+            return _front([(p.type, p.data) for p in f.pictures])
 
         tags = f.tags
         if tags is None:
             return _folder_cover(path)
 
-        for key in tags.keys():
-            if key.startswith("APIC"):
-                return tags[key].data
+        found = [(v.type, v.data) for k, v in tags.items() if k.startswith("APIC")]
+        if found:
+            return _front(found)
 
         if "covr" in tags and tags["covr"]:
             return bytes(tags["covr"][0])
@@ -254,19 +292,30 @@ def _extract_art_uncached(path: Path) -> bytes | None:
         for key in ("metadata_block_picture", "METADATA_BLOCK_PICTURE"):
             if key in tags:
                 vals = tags[key]
-                raw  = vals[0] if isinstance(vals, list) else vals
-                try:
-                    return Picture(base64.b64decode(raw)).data
-                except Exception:
-                    continue
+                found = []
+                for raw in (vals if isinstance(vals, list) else [vals]):
+                    try:
+                        pic = Picture(base64.b64decode(raw))
+                        found.append((pic.type, pic.data))
+                    except Exception:
+                        continue
+                if found:
+                    return _front(found)
 
+        if "WM/Picture" in tags:
+            vals = tags["WM/Picture"]
+            found = [_wm_picture(bytes(getattr(v, "value", v))) for v in (vals if isinstance(vals, list) else [vals])]
+            if data := _front(found):
+                return data
+
+        # APE tags (Monkey's Audio, WavPack, Musepack): "Cover Art (Front)" holds the file name, a NUL, the image
+        found = []
         for key in tags.keys():
-            if key == "WM/Picture":
-                val = tags[key]
-                val = val[0] if isinstance(val, list) else val
-                data = getattr(val, "value", None) or bytes(val)
-                if data:
-                    return bytes(data)
+            if str(key).lower().startswith("cover art"):
+                raw = bytes(getattr(tags[key], "value", tags[key]))
+                found.append((3 if "front" in str(key).lower() else 0, raw.partition(b"\0")[2]))
+        if found:
+            return _front(found)
 
     except Exception:
         pass
@@ -967,7 +1016,7 @@ class Player(QObject):
     def _set_engine_next(self):
         # A preload decodes a whole track, so it waits until the track has played for a
         # second, otherwise clicking through a list would start one for every song passed.
-        self._next_timer.start()
+        self._next_timer.start(1000)
 
     def _set_engine_next_now(self):
         """Preload the upcoming track into the DSP engine for gapless playback
@@ -985,6 +1034,14 @@ class Player(QObject):
         ext = t.path.suffix.lower()
         if ext in _GME_EXTS or ext in _FUR_EXTS or ext in VIDEO_EXTS or cli_render.supported(ext):
             self._dsp.clear_next()   # can't gaplessly cross into non-engine formats
+            return
+        # The decoded song sits in memory until it plays, as large as the song is long. It is decoded a minute before it is
+        # needed, not at the start of the one before, which halves what a player holds for most of every song and saves
+        # hundreds of megabytes when one is an hour long. Decoding runs far faster than playing.
+        left = (self.duration_ms - self.position_ms) / 1000.0
+        if self.duration_ms > 0 and left > _PRELOAD_LEAD_S + 2:
+            self._dsp.clear_next()
+            self._next_timer.start(int((left - _PRELOAD_LEAD_S) * 1000))
             return
         self._dsp.set_next(t.path, nxt, trim=self._trim_silence)
 
@@ -1435,6 +1492,7 @@ class Player(QObject):
             return
         if self._dsp_active:
             self._dsp.seek(frac)
+            self._set_engine_next()          # the time left changed, so when to decode the next song did
             return
         dur = self._media.duration()
         if dur > 0:

@@ -32,14 +32,14 @@ import sid_player
 from applog import log
 from artists import join_artists, split_artists
 from audio_files import (CHIP_EXTS, FAT_32_FS, Cancelled as _Cancelled, _norm, _numbered, base_renderers,  # noqa: F401
-                         blank_tags, expand_sources as _expand, fat_name, free_path, printable, put_artists,
+                         blank_tags, expand_sources as _expand, fat_name, free_path, kill_group, printable, put_artists,
                          read_mounts, read_tags, run_ffmpeg, run_until_cancel, unique_name)
 from ffmpeg_util import ffmpeg_path
 from player import AUDIO_EXTS, extract_art
 from PySide6.QtCore import QObject, QTimer, Signal
 
 GLYPH = {'usb': '\U000f129e', 'sd': '\U000f0479', 'disk': '\U000f02ca', 'ipod': '\U000f0c91',
-         'iphone': '\U000f011c', 'mtp': '\U000f011c'}
+         'iphone': '\U000f011c', 'mtp': '\U000f011c', 'cd': '\U000f05ee'}
 MUSIC_DIR = 'Music'
 MAX_SCAN = 50000
 FAT_FILE_LIMIT = 4 * 1024 ** 3 - 1
@@ -249,7 +249,8 @@ _I = {'block': UD_SERVICE + '.Block', 'drive': UD_SERVICE + '.Drive', 'fs': UD_S
 _BLOCK_PROPS = ('Device', 'IdUsage', 'IdType', 'IdLabel', 'IdUUID', 'Size', 'ReadOnly', 'HintSystem', 'HintIgnore',
                 'HintName', 'Drive')
 _DRIVE_PROPS = ('Vendor', 'Model', 'Serial', 'Id', 'Size', 'Removable', 'MediaRemovable', 'ConnectionBus',
-                'CanPowerOff', 'SiblingId', 'Optical', 'Media', 'RotationRate')
+                'CanPowerOff', 'SiblingId', 'Optical', 'Media', 'RotationRate', 'MediaAvailable', 'OpticalNumAudioTracks',
+                'OpticalNumDataTracks', 'MediaCompatibility', 'OpticalBlank')
 # keys are patterns: the error names that udisksctl prints, and the plain messages UDisks2 sends (busctl shows no name)
 _UD_ERRORS = (
     ('DeviceBusy|is busy', "Something is still using the device. Close the programs that use it and try again."),
@@ -257,7 +258,11 @@ _UD_ERRORS = (
     ('AlreadyMounted|already mounted', "It is already mounted."), ('NotMounted|is not mounted', "It is not mounted."),
     ('UnknownFilesystem|nknown filesystem|wrong fs type', "The file system on this device is not one this "
                                                           "computer can open."),
-    ('NotSupported', "This computer cannot open that file system."))
+    ('NotSupported', "This computer cannot open that file system."),
+    ('No such interface.*Filesystem', "There is no file system on it that this computer can open."),
+    ('Error ejecting|tray close command failed', "The drive did not answer. A DVD drive needs more power than some USB "
+                                                 "ports give: plug it into a port on the computer itself, not a hub, "
+                                                 "or into a powered hub."))
 
 
 def classify(block: dict, drive: dict) -> str:
@@ -275,6 +280,61 @@ def classify(block: dict, drive: dict) -> str:
         return ''
     vendor, model = (drive.get('Vendor') or '').strip().lower(), (drive.get('Model') or '').lower()
     return 'ipod' if vendor == 'apple' and 'ipod' in model else 'usb'
+
+
+def is_optical(drive: dict) -> bool:
+    """A CD or DVD drive. UDisks2 sets Optical only while a disc is in it, so an empty drive is known by the kinds of disc it
+    takes."""
+    return bool(drive.get('Optical')) or any(str(m).startswith('optical') for m in drive.get('MediaCompatibility') or [])
+
+
+NO_BURNER = "Writing discs needs xorriso. Install the libisoburn package and try again."
+_UNIT = {'': 1, 'k': 1 << 10, 'm': 1 << 20, 'g': 1 << 30}
+_PERCENT = re.compile(r'(\d+(?:\.\d+)?)%')
+
+
+def burner() -> str | None:
+    """xorriso, which writes the discs, or None when it is not installed."""
+    return shutil.which('xorriso')
+
+
+def parse_free(text: str) -> int:
+    """The room xorriso says a disc has ("4482m free" in its Media summary line), in bytes, 0 when it says nothing."""
+    m = re.search(r'(\d+)([kmg]?)\s+free', text)
+    return int(m.group(1)) * _UNIT[m.group(2)] if m else 0
+
+
+def xorriso_quote(s: str) -> str:
+    """One word of an xorriso options file: in single quotes, a quote inside as '"'"'."""
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def cd_write_problem(dev) -> str:
+    """Why nothing can be written to this disc, or '' when it can: a blank disc, with xorriso there and its room known."""
+    d = dev.details
+    if not d.get('media'):
+        return "There is no disc in the drive."
+    if not d.get('blank'):
+        return "Only a blank disc can be written to from here. This one already has something on it."
+    if not burner():
+        return NO_BURNER
+    if not d.get('free_bytes'):
+        return "The disc is still being measured. Try again in a moment."
+    return ''
+
+
+def cd_is_audio(e: dict) -> bool:
+    """Does this optical drive hold an audio CD (tracks and no file system)? Data discs are ordinary read only volumes."""
+    return e['block'].get('IdUsage') != 'filesystem' and int(e['drive'].get('OpticalNumAudioTracks') or 0) > 0
+
+
+def cd_mount_dir(node: str) -> Path | None:
+    """Where GVFS opens the tracks of the audio CD in /dev/sr0 (one Track N.wav file each), or None while it has not."""
+    want = 'cdda:host=%s' % Path(node).name
+    try:
+        return next((idevice.GVFS_ROOT / n for n in os.listdir(idevice.GVFS_ROOT) if n == want), None)
+    except OSError:
+        return None
 
 
 def parent_disk(dev: str) -> str:
@@ -331,6 +391,18 @@ class UdisksBackend:
             # a whole disk that has a partition table is not a volume, its partitions are
             if kind and (kind == 'locked' or _I['ptable'] not in ifaces):
                 entries.append({'kind': kind, 'path': path, 'drive_path': dp, 'block': blk, 'drive': drive})
+        # CD and DVD drives are listed whether a disc is in them or not, a disc with a file system as a read only volume
+        # and an audio CD through GVFS, so the tray can be opened and closed from here
+        for dp in sorted(objs):
+            if '/drives/' not in dp or _I['drive'] not in objs[dp]:
+                continue
+            drive = self._props(objs[dp][_I['drive']], _DRIVE_PROPS)
+            if not is_optical(drive):
+                continue
+            blk_path, blk = next(((p, self._props(objs[p][_I['block']], _BLOCK_PROPS)) for p in sorted(objs)
+                                  if '/block_devices/' in p and _I['block'] in objs[p]
+                                  and self._props(objs[p][_I['block']], ('Drive',))['Drive'] == dp), ('', {}))
+            entries.append({'kind': 'cd', 'path': blk_path, 'drive_path': dp, 'block': blk, 'drive': drive})
         return entries
 
     def _call(self, path: str, iface: str, member: str, options: dict | None = None) -> tuple[bool, str]:
@@ -347,14 +419,30 @@ class UdisksBackend:
         except (ValueError, LookupError, TypeError):
             return True, ''
 
+    @staticmethod
+    def _gio(args: list[str]) -> tuple[bool, str]:
+        rc, out, err = idevice._run(['gio'] + args, 30)
+        return rc == 0, '' if rc == 0 else (err.strip() or out.strip() or "That did not work.")
+
     def mount(self, e: dict):
+        if e.get('kind') == 'cd' and cd_is_audio(e):
+            return self._gio(['mount', 'cdda://%s/' % Path(e['block']['Device']).name])
         return self._call(e['path'], _I['fs'], 'Mount', {'options': 'ro'} if e['block'].get('ReadOnly') else {})
 
     def unmount(self, e: dict):
+        if e.get('kind') == 'cd' and cd_is_audio(e):
+            return self._gio(['mount', '-u', 'cdda://%s/' % Path(e['block']['Device']).name])
         return self._call(e['path'], _I['fs'], 'Unmount')
 
     def power_off(self, e: dict):
         return self._call(e['drive_path'], _I['drive'], 'PowerOff')
+
+    def open_tray(self, e: dict):
+        return self._call(e['drive_path'], _I['drive'], 'Eject')
+
+    def close_tray(self, e: dict):
+        rc, out, err = idevice._run(['eject', '-t', e['block'].get('Device') or '/dev/cdrom'], 20)
+        return rc == 0, '' if rc == 0 else ud_error(err.strip() or out.strip() or "The tray did not close.")
 
 
 class MountBackend:
@@ -685,7 +773,7 @@ class DeviceMonitor(QObject):
     _wake = Signal()
 
     def __init__(self, parent=None, backend=None, mountinfo: str | Path = '/proc/self/mountinfo',
-                 cache_dir: Path | None = None):
+                 cache_dir: Path | None = None, roots_file: Path | None = None):
         super().__init__(parent)
         self._backend, self._fixed = backend, backend is not None
         self.mountinfo = mountinfo
@@ -702,6 +790,10 @@ class DeviceMonitor(QObject):
         self._lock = threading.Lock()
         self._pairing: dict = {}
         self._phones: dict = {}
+        self.roots_file = Path(roots_file or Path.home() / '.config' / 'audiocrate' / 'device_roots.json')
+        self._roots: dict | None = None            # device id -> the folder to read, '.' for the whole drive
+        self._cd_info: dict = {}                  # (drive, media) -> {'free': bytes of room on a blank disc, 'at'}
+        self._cd_probing: set = set()
         self._table: dict | None = None           # the mount table as last seen, for a hidden panel's tick
         self.listed = False                       # the first look has been delivered
         self._snapshot.connect(self._on_snapshot)
@@ -847,7 +939,45 @@ class DeviceMonitor(QObject):
             out.append(d)
         return out, by_id
 
+    def _probe_cd(self, key, node: str):
+        """Ask xorriso how much room the blank disc in the drive has. Runs on a thread of its own: it wakes the drive."""
+        try:
+            rc, out, err = idevice._run([burner(), '-outdev', node, '-toc'], 45, 1 << 20)
+            self._cd_info[key] = {'free': parse_free(out + err) if rc == 0 else 0, 'at': time.monotonic()}
+        finally:
+            self._cd_probing.discard(key)
+            self._wake.emit()
+
+    def _cd_device(self, e: dict, mounts: dict) -> Device:
+        """A CD or DVD drive: the disc in it, or the empty drive. Read only, and an audio CD opens through GVFS."""
+        b, dr = e['block'], e['drive']
+        vendor, model = (dr.get('Vendor') or '').strip(), (dr.get('Model') or '').strip()
+        node, media, audio = b.get('Device') or '', bool(dr.get('MediaAvailable') or dr.get('Optical')), cd_is_audio(e)
+        m = mounts.get(node)
+        mount = Path(m['mount']) if m else cd_mount_dir(node) if audio and media else None
+        blank = media and bool(dr.get('OpticalBlank'))
+        usable = media and not blank and (audio or b.get('IdUsage') == 'filesystem')
+        free = 0
+        if blank and burner():
+            key = (dr.get('Id') or node, str(dr.get('Media') or ''))
+            info = self._cd_info.get(key)
+            if (info is None or (not info['free'] and time.monotonic() - info['at'] > 60)) and key not in self._cd_probing:
+                self._cd_probing.add(key)
+                self._thread(self._probe_cd, key, node, wait=False)       # how much room the blank disc has
+            free = (info or {}).get('free', 0)
+        name = (b.get('IdLabel') or ('Audio CD' if audio else 'Blank disc' if blank else 'Disc' if media else 'No disc'))
+        return Device(
+            id='cd:%s' % (dr.get('Id') or node), kind='cd', name=name, model=(vendor + ' ' + model).strip(),
+            vendor=vendor, mount=mount, block=node, capacity=int(b.get('Size') or 0) if usable else free,
+            fs=b.get('IdType') or ('cdda' if audio else ''), read_only=True, mounted=mount is not None and media,
+            glyph=GLYPH['cd'],
+            details={'cd': True, 'media': media, 'audio': audio, 'blank': blank, 'usable': usable, 'free_bytes': free, 'writable': bool(free), 'tracks': int(dr.get('OpticalNumAudioTracks') or 0),
+                     'locked': False, 'rockbox': False, 'serial': dr.get('Serial') or '', 'bus': dr.get('ConnectionBus') or '',
+                     'can_power_off': False, 'drive': e.get('drive_path', ''), 'sibling': dr.get('SiblingId') or ''})
+
     def _device(self, e: dict, mounts: dict) -> Device:
+        if e['kind'] == 'cd':
+            return self._cd_device(e, mounts)
         b, dr = e['block'], e['drive']
         m = mounts.get(b.get('Device', ''))
         mnt = e.get('mount') or (m['mount'] if m else '')
@@ -1039,11 +1169,97 @@ class DeviceMonitor(QObject):
         if dev.details.get('locked'):
             return self._finished('mount', device_id, 'error', "This drive is encrypted. Open it in your file "
                                                                "manager first, then it shows up here.")
+        if dev.kind == 'cd' and not dev.details.get('media'):
+            return self._finished('mount', device_id, 'error', "There is no disc in the drive.")
+        if dev.kind == 'cd' and not dev.details.get('usable'):
+            return self._finished('mount', device_id, 'error', "This disc is blank." if dev.details.get('blank') else
+                                  "This disc has no audio tracks and no files that AudioCrate can open.")
         if dev.mounted:
             return self._finished('mount', device_id, 'done', "It is already mounted.")
         return self._start('mount', device_id, self._do_mount, self._entries.get(device_id))
 
     pair = mount
+
+    def close_tray(self, device_id: str) -> str:
+        """Close the tray of a CD or DVD drive. A disc in it takes a few seconds to be read."""
+        e = self._entries.get(device_id)
+        if e is None or e.get('kind') != 'cd' or not hasattr(self._backend, 'close_tray'):
+            return self._finished('close_tray', device_id, 'error', _GONE)
+        return self._start('close_tray', device_id, self._do_close_tray, e)
+
+    def _do_burn(self, job, dev, paths):
+        """Write songs to a blank disc with xorriso: a session with a Music folder, readable on any computer. A disc can
+        be written once, so everything is checked first and a cancel is a warning, not a pause."""
+        exe = burner()
+        if not exe:
+            raise DeviceError(NO_BURNER)
+        entries, used = [], set()
+        for p in paths:
+            found = [(f, '/Music/%s/%s' % (p.name, f.relative_to(p).as_posix())) for f in _expand([p], AUDIO_EXTS)] \
+                if p.is_dir() else [(p, '/Music/%s' % p.name)] if p.is_file() else []
+            for src, on_disc in found:
+                n, root, ext = 2, on_disc.rsplit('.', 1)[0], '.' + on_disc.rsplit('.', 1)[-1]
+                while on_disc in used:
+                    on_disc, n = '%s (%d)%s' % (root, n, ext), n + 1
+                used.add(on_disc)
+                entries.append((src, on_disc))
+        if not entries:
+            raise DeviceError("There is no music in what was chosen.")
+        total = sum(src.stat().st_size for src, _ in entries)
+        room = dev.details.get('free_bytes') or 0
+        if total > room:
+            raise DeviceError("The songs take %.1f GB and the disc has room for %.1f GB." % (total / 1e9, room / 1e9))
+        job.total_files, job.text = len(entries), "Writing %d songs to the disc" % len(entries)
+        job.publish(True)
+        lines = ['-outdev ' + xorriso_quote(dev.block), '-volid ' + xorriso_quote('AudioCrate'), '-joliet on',
+                 '-rockridge on']
+        lines += ['-map %s %s' % (xorriso_quote(str(s)), xorriso_quote(t)) for s, t in entries]
+        lines += ['-commit', '-eject out']
+        script = Path(tempfile.mkdtemp(prefix='burn-', dir=self.cache_dir if self.cache_dir.is_dir() else None)) / 'job.txt'
+        script.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        tail = []
+        try:
+            job.proc = subprocess.Popen([exe, '-options_from_file', str(script)], stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+            buf = b''
+            while True:
+                chunk = job.proc.stdout.read1(512)
+                if not chunk:
+                    break
+                buf += chunk
+                *done, buf = re.split(rb'[\r\n]', buf)
+                for raw in done:
+                    line = raw.decode('utf-8', 'replace').strip()
+                    if not line:
+                        continue
+                    tail = (tail + [line])[-6:]
+                    m = _PERCENT.search(line) if line.startswith('Writing') else None
+                    if m:
+                        job.done_files, job.sub = 0, min(float(m.group(1)) / 100.0, 1.0) * job.total_files
+                        job.text = "Writing to the disc, %d%%" % float(m.group(1))
+                        job.publish()
+                if job.cancel.is_set():
+                    kill_group(job.proc)
+                    raise _Cancelled
+            rc = job.proc.wait()
+        finally:
+            if job.proc is not None and job.proc.poll() is None:
+                kill_group(job.proc)
+            shutil.rmtree(script.parent, ignore_errors=True)
+        if rc != 0:
+            why = next((l for l in reversed(tail) if 'FAILURE' in l or 'SORRY' in l or 'FATAL' in l), tail[-1] if tail else '')
+            raise DeviceError("The disc could not be written. %s" % why.split(':', 1)[-1].strip())
+        job.sub = 0.0
+        job.done_files = job.total_files
+        job.text = "Done. Close the tray to read the disc."
+
+    def _do_close_tray(self, job, e):
+        job.text = "Closing the tray"
+        job.publish()
+        ok, text = self._backend.close_tray(e)
+        if not ok:
+            raise DeviceError(text)
+        job.text = "The tray is closed."
 
     def unmount(self, device_id: str) -> str:
         dev = self._find(device_id)
@@ -1102,6 +1318,14 @@ class DeviceMonitor(QObject):
         dev = self._find(device_id)
         if dev is not None and dev.kind == 'iphone':
             return self._finished('copy_to', device_id, 'error', idevice.IOS_NOTE)
+        if dev is not None and dev.kind == 'cd':
+            why = cd_write_problem(dev)
+            if why:
+                return self._finished('copy_to', device_id, 'error', why)
+            if self._busy.get(device_id):
+                return self._finished('copy_to', device_id, 'error',
+                                      "Another job is running on this drive. Wait for it to finish first.")
+            return self._start('burn', device_id, self._do_burn, dev, [Path(p) for p in paths])
         if dev is None or not dev.mounted:
             return self._finished('copy_to', device_id, 'error', "Mount the device first.")
         if dev.read_only:
@@ -1170,7 +1394,8 @@ class DeviceMonitor(QObject):
     def _do_unmount(self, job, dev):
         job.text = "Saving files"
         job.publish()
-        flush(dev.mount)
+        if dev.kind != 'cd':                 # nothing can be written to a disc
+            flush(dev.mount)
         if dev.kind == 'iphone':
             ok, text = idevice.unmount_afc(dev.id)
         else:
@@ -1182,8 +1407,23 @@ class DeviceMonitor(QObject):
     def _do_eject(self, job, dev):
         job.text = "Saving files"
         job.publish()
-        if dev.mount:
+        if dev.mount and dev.kind != 'cd':
             flush(dev.mount)
+        if dev.kind == 'cd':
+            e = self._entries.get(dev.id)
+            if e is None:
+                raise DeviceError(_GONE)
+            if dev.mounted:
+                job.text = "Closing the disc"
+                job.publish()
+                ok, text = self._backend.unmount(e)
+                if not ok and 'not mounted' not in text.lower():
+                    raise DeviceError("The disc could not be closed. %s" % text)
+            ok, text = self._backend.open_tray(e)
+            if not ok:
+                raise DeviceError("The tray did not open. %s" % text)
+            job.text = "The tray is open."
+            return
         if dev.kind == 'iphone':
             if dev.mounted:
                 phone_files.unmount_apps(dev.id)        # the apps area is only open when the Files view asked for it
@@ -1254,6 +1494,29 @@ class DeviceMonitor(QObject):
         n = ipod.restore_backup(info, backup_id, dev.id)
         job.text = "Restored %d files. The iPod's library is back as it was." % n
 
+    # which folder of a drive is read
+    def root(self, device_id: str) -> str | None:
+        """The folder of a drive that was chosen for its songs ('.' for all of it), None when nobody chose."""
+        if self._roots is None:
+            try:
+                self._roots = json.loads(self.roots_file.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                self._roots = {}
+        return self._roots.get(device_id)
+
+    def set_root(self, device_id: str, rel: str | None):
+        """Choose the folder to read, '.' for the whole drive, None to be asked again."""
+        self.root(device_id)
+        if rel is None:
+            self._roots.pop(device_id, None)
+        else:
+            self._roots[device_id] = rel
+        try:
+            self.roots_file.parent.mkdir(parents=True, exist_ok=True)
+            self.roots_file.write_text(json.dumps(self._roots, indent=1), encoding='utf-8')
+        except OSError:
+            log.warning("could not save the music folders of the drives")
+
     # scanning
     def _scan_worker(self, rid: int, dev: Device, subpath: str):
         try:
@@ -1298,8 +1561,10 @@ class DeviceMonitor(QObject):
     def _scan_files(self, dev: Device, subpath: str):
         # an iPod's own music is under names like F07/ABCD.mp3, which its library view lists properly
         skip = ('ipod_control',) if dev.kind == 'ipod' and not subpath.strip('./') else ()
-        items, truncated = self._music_below(safe_join(dev.mount, subpath), dev.mount, skip_top=skip)
-        return items, {'kind': dev.kind, 'device': dev.id, 'subpath': subpath, 'count': len(items),
+        chosen = self.root(dev.id) if dev.kind == 'usb' and not subpath.strip('./') else None
+        base = chosen if chosen and chosen != '.' else subpath
+        items, truncated = self._music_below(safe_join(dev.mount, base), dev.mount, skip_top=skip)
+        return items, {'kind': dev.kind, 'device': dev.id, 'subpath': subpath, 'count': len(items), 'root': chosen or '',
                        'truncated': truncated, 'rockbox': dev.details.get('rockbox', False)}
 
     def _scan_ipod(self, dev: Device):

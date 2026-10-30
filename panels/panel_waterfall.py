@@ -499,6 +499,8 @@ class WaterfallWidget(QWidget):
 
     def __init__(self, analyzer: Analyzer, player: Player, parent=None):
         super().__init__(parent)
+        # paintEvent fills the whole widget, so the window need not paint the panel frame and the window under it first
+        self.setAttribute(Qt.WA_OpaquePaintEvent)
         self._analyzer = analyzer
         self._player = player
         self._cfg = clean_config({})
@@ -883,15 +885,17 @@ class WaterfallWidget(QWidget):
             if time.perf_counter() - self._last_paint > 0.25 and self._player.is_playing:
                 self.update()
             return
-        self._advance_safe()
-        self.update()
+        if self._advance_safe():
+            self.update()           # a stopped or paused picture stays as it is: no repaint sixty times a second
 
-    def _advance_safe(self):
+    def _advance_safe(self) -> bool:
+        """True when the picture changed."""
         try:
-            self._advance()
+            return bool(self._advance())
         except Exception:
             from applog import log
             log.exception("waterfall frame failed")
+            return False
 
     def _sync_rate(self):
         """The engine plays at the output device's rate, which is not always the analyzer's."""
@@ -909,14 +913,14 @@ class WaterfallWidget(QWidget):
         if self._frozen or not self._player.is_playing:
             self._acc = 0.0
             self._last_pos = -1
-            return
+            return False
         c = self._cfg
         rate = c["rate"]
         self._acc += dt * rate
         n = int(self._acc)
         self._acc -= n
         if n <= 0:
-            return
+            return False
         pos = self._player.position_ms
         if self._last_pos >= 0 and (pos < self._last_pos - 200 or pos > self._last_pos + 1500 + dt * 1000):
             self._marker = True                    # a seek or a jump: show where the picture breaks
@@ -932,6 +936,7 @@ class WaterfallWidget(QWidget):
                 self._write_row(self._silence)
                 continue
             self._write_row(self._spectrum(win))
+        return True
 
     def _spectrum(self, win: np.ndarray) -> np.ndarray:
         """One FFT as dB on the history's columns."""

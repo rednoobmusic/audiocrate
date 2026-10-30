@@ -14,7 +14,22 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 
 _STATE_FILE = Path.home() / ".config" / "audiocrate" / "ui_state.json"
 
-_DEFAULT_LAYOUT = json.loads('{"geometry": "AdnQywADAAAAAAABAAAGRwAABcsAAAr4AAAAAQAABkcAAAXLAAAK+AAAAAAAAAAACgAAAAABAAAGRwAABcsAAAr4", "dock_state": "AAAA/wAAAAD9AAAABAAAAAAAAALhAAAEhPwCAAAAAfwAAAAbAAAEhAAAAToA/////AIAAAAD/AAAABsAAAJUAAAAAAD////8AQAAAAH8AAACIAAAAbwAAAAAAP////r/////AgAAAAD7AAAAFgBOAG8AdwAgAFAAbABhAHkAaQBuAGcBAAAAGwAAA3AAAACnAP///vsAAAAQAEMAbwBuAHQAcgBvAGwAcwEAAAOPAAABEAAAAI8A///+AAAAAQAAAuIAAASE/AIAAAAD/AAAABsAAAL3AAAA3QEAABz6AAAAAwEAAAAE+wAAABAAUABsAGEAeQBsAGkAcwB0AQAAAAD/////AAAAsgD////7AAAADgBMAGkAYgByAGEAcgB5AQAAAAD/////AAAA7AD////7AAAACABJAG4AZgBvAQAAAAD/////AAAAbwD////7AAAAEABTAGUAdAB0AGkAbgBnAHMBAAAAAP////8AAACJAP////sAAAAMAEwAeQByAGkAYwBzAQAAAxYAAAGJAAAALwD///78AAACwQAAAd4AAAAAAP////r/////AgAAAAAAAAACAAACkwAAAIz8AQAAAAH7AAAAEABTAHAAZQBjAHQAcgB1AG0AAAABnAAAApMAAACWAP///wAAAAMAAAIaAAAEgPwBAAAAAfsAAAAYAE8AcwBjAGkAbABsAG8AcwBjAG8AcABlAAAAAZwAAAB1AAAApAD///8AAAAAAAAEhAAAAAEAAAACAAAAAQAAAAL8AAAAAA==", "docks": {"Info": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Library": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Playlist": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Lyrics": {"geo": "AdnQywADAAAAAALpAAADFgAABcoAAASeAAAAAAAAAAD//////////wAAAAAAAAAACgAAAALpAAADFgAABcoAAASe", "visible": true}, "Settings": {"geo": "AdnQywADAAAAAALpAAAAGwAABcoAAALzAAAAAAAAAAD//////////wAAAAAAAAAACgAAAALpAAAAGwAABcoAAALz", "visible": true}, "Oscilloscope": {"geo": "AdnQywADAAAAAAGcAAAAGwAAAhAAAASaAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAGcAAAAGwAAAhAAAASa", "visible": false}, "Controls": {"geo": "AdnQywADAAAAAAAAAAADjwAAAuAAAASeAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAADjwAAAuAAAASe", "visible": true}, "Now Playing": {"geo": "AdnQywADAAAAAAAAAAAAGwAAAuAAAAOKAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAAAGwAAAuAAAAOK", "visible": true}, "Spectrum": {"geo": "AdnQywADAAAAAAGcAAAAFwAABC4AAACiAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAGcAAAAFwAABC4AAACi", "visible": false}, "Video": {"geo": "AdnQywADAAAAAAAAAAAAGwAAAuAAAAOKAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAAAGwAAAuAAAAOK", "visible": false}}}')
+_DEFAULT_LAYOUT = json.loads('{"geometry": "AdnQywADAAAAAAAAAAAAAAAABvkAAARbAAAAAQAAABkAAAb4AAAEWgAAAAACAAAABvoAAAAAAAAAAAAABvkAAARb", "dock_state": "AAAA/wAAAAD9AAAAAgAAAAAAAAN3AAAEJPwCAAAAA/wAAAAiAAAB8QAAANUBAAAb+gAAAAABAAAABvsAAAAYAE8AcwBjAGkAbABsAG8AcwBjAG8AcABlAQAAAAD/////AAAAmAD////7AAAAEABNAGkAbABrAGQAcgBvAHABAAAAAP////8AAACiAP////sAAAAWAE4AbwB3ACAAUABsAGEAeQBpAG4AZwEAAAAA/////wAAAJMA////+wAAAAwATwBuAGwAaQBuAGUBAAAAAP////8AAADKAP////sAAAAOAEQAZQB2AGkAYwBlAHMBAAAAAP////8AAADeAP////sAAAAKAFYAaQBkAGUAbwEAAAAA/////wAAAHIA/////AAAAhkAAAGHAAABhQEAABv6AAAAAAIAAAAC+wAAABIARQBxAHUAYQBsAGkAegBlAHIBAAAAAP////8AAAFpAP////sAAAAGAEQAUwBQAQAAAAD/////AAAApgD////7AAAAEABDAG8AbgB0AHIAbwBsAHMBAAADpgAAAKAAAACgAP///wAAAAEAAAN3AAAEJPwCAAAAA/wAAAAiAAADYAAAAWEBAAAb+gAAAAACAAAAB/sAAAAQAFAAbABhAHkAbABpAHMAdAEAAAAA/////wAAAOoA////+wAAAA4ATABpAGIAcgBhAHIAeQEAAAAA/////wAAAOIA////+wAAABAAUwBlAHQAdABpAG4AZwBzAQAAAAD/////AAAAhwD////7AAAACgBTAHQAYQB0AHMBAAAAAP////8AAAFFAP////sAAAAOAFUAcAAgAE4AZQB4AHQBAAAAAP////8AAACfAP////sAAAAMAEwAeQByAGkAYwBzAQAAAAD/////AAAAKAD////7AAAACABJAG4AZgBvAQAAAAD/////AAAAgAD////7AAAAEgBXAGEAdABlAHIAZgBhAGwAbAEAAAOIAAAAvgAAAEEA////+wAAABAAUwBwAGUAYwB0AHIAdQBtAgAAAMAAAAHzAAADdwAAAL4AAAAAAAAEJAAAAAEAAAACAAAAAQAAAAL8AAAAAA==", "docks": {"Settings": {"geo": "AdnQywADAAD///qV///6x////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6x////gv///4L", "visible": true}, "Playlist": {"geo": "AdnQywADAAAAAAODAAAAIgAABvkAAANlAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAODAAAAIgAABvkAAANl", "visible": true}, "Library": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Stats": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Up Next": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Lyrics": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Info": {"geo": "AdnQywADAAD///qV///6yv///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///6yv///gv///4L", "visible": true}, "Milkdrop": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Now Playing": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Online": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Devices": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Video": {"geo": "AdnQywADAAD///qV///8Of///gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///qV///8Of///gv///4L", "visible": true}, "Oscilloscope": {"geo": "AdnQywADAAAAAAAAAAAAIgAAA3YAAAH2AAAAAAAAAAD//////////wAAAAAAAAAABvoAAAAAAAAAIgAAA3YAAAH2", "visible": true}, "Waterfall": {"geo": "AdnQywADAAAAAAODAAADiAAABvkAAARFAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAODAAADiAAABvkAAARF", "visible": true}, "Spectrum": {"geo": "AdnQywADAAAAAADAAAAB8wAABDYAAAKwAAAAwAAAAfMAAAQ2AAACsAAAAAAAAAAABvoAAADAAAAB8wAABDYAAAKw", "visible": false}, "Equalizer": {"geo": "AdnQywADAAAAAAAAAAACGQAAA3YAAAODAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAAAAAACGQAAA3YAAAOD", "visible": true}, "DSP": {"geo": "AdnQywADAAD///1m///9I////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAABvr///1m///9I////gv///4L", "visible": true}, "Controls": {"geo": "AdnQywADAAAAAAAAAAADpgAAA3YAAARFAAAAAAAAAAD//////////wAAAAAAAAAABvoAAAAAAAADpgAAA3YAAARF", "visible": true}}}')
+_COMPACT_LAYOUT = json.loads('{"geometry": "AdnQywADAAAAAAABAAAGRwAABcsAAAr4AAAAAQAABkcAAAXLAAAK+AAAAAAAAAAACgAAAAABAAAGRwAABcsAAAr4", "dock_state": "AAAA/wAAAAD9AAAABAAAAAAAAALhAAAEhPwCAAAAAfwAAAAbAAAEhAAAAToA/////AIAAAAD/AAAABsAAAJUAAAAAAD////8AQAAAAH8AAACIAAAAbwAAAAAAP////r/////AgAAAAD7AAAAFgBOAG8AdwAgAFAAbABhAHkAaQBuAGcBAAAAGwAAA3AAAACnAP///vsAAAAQAEMAbwBuAHQAcgBvAGwAcwEAAAOPAAABEAAAAI8A///+AAAAAQAAAuIAAASE/AIAAAAD/AAAABsAAAL3AAAA3QEAABz6AAAAAwEAAAAE+wAAABAAUABsAGEAeQBsAGkAcwB0AQAAAAD/////AAAAsgD////7AAAADgBMAGkAYgByAGEAcgB5AQAAAAD/////AAAA7AD////7AAAACABJAG4AZgBvAQAAAAD/////AAAAbwD////7AAAAEABTAGUAdAB0AGkAbgBnAHMBAAAAAP////8AAACJAP////sAAAAMAEwAeQByAGkAYwBzAQAAAxYAAAGJAAAALwD///78AAACwQAAAd4AAAAAAP////r/////AgAAAAAAAAACAAACkwAAAIz8AQAAAAH7AAAAEABTAHAAZQBjAHQAcgB1AG0AAAABnAAAApMAAACWAP///wAAAAMAAAIaAAAEgPwBAAAAAfsAAAAYAE8AcwBjAGkAbABsAG8AcwBjAG8AcABlAAAAAZwAAAB1AAAApAD///8AAAAAAAAEhAAAAAEAAAACAAAAAQAAAAL8AAAAAA==", "docks": {"Info": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Library": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Playlist": {"geo": "AdnQywADAAD///sq///7M////gv///4LAAAAAAAAAAD//////////wAAAAAAAAAACgD///sq///7M////gv///4L", "visible": true}, "Lyrics": {"geo": "AdnQywADAAAAAALpAAADFgAABcoAAASeAAAAAAAAAAD//////////wAAAAAAAAAACgAAAALpAAADFgAABcoAAASe", "visible": true}, "Settings": {"geo": "AdnQywADAAAAAALpAAAAGwAABcoAAALzAAAAAAAAAAD//////////wAAAAAAAAAACgAAAALpAAAAGwAABcoAAALz", "visible": true}, "Oscilloscope": {"geo": "AdnQywADAAAAAAGcAAAAGwAAAhAAAASaAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAGcAAAAGwAAAhAAAASa", "visible": false}, "Controls": {"geo": "AdnQywADAAAAAAAAAAADjwAAAuAAAASeAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAADjwAAAuAAAASe", "visible": true}, "Now Playing": {"geo": "AdnQywADAAAAAAAAAAAAGwAAAuAAAAOKAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAAAGwAAAuAAAAOK", "visible": true}, "Spectrum": {"geo": "AdnQywADAAAAAAGcAAAAFwAABC4AAACiAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAGcAAAAFwAABC4AAACi", "visible": false}, "Video": {"geo": "AdnQywADAAAAAAAAAAAAGwAAAuAAAAOKAAAAAAAAAAD//////////wAAAAAAAAAACgAAAAAAAAAAGwAAAuAAAAOK", "visible": false}}}')
+
+_FULL_LAYOUT_MIN = 980       # the full layout needs a window this tall (936 px at 1280 wide on Linux, 944 under Windows; tools/check_default_layout.py keeps this true)
+
+
+def _first_layout() -> dict:
+    """What a start with no saved layout opens: the full layout, or the compact one on a screen too short to hold it
+    (a 768 line laptop, or a 1080p one scaled to 125 percent), where the full one would run off the bottom of the screen."""
+    screen = QApplication.primaryScreen()
+    return _COMPACT_LAYOUT if screen is not None and screen.availableGeometry().height() < _FULL_LAYOUT_MIN else _DEFAULT_LAYOUT
+
+
+def _baked(d: dict) -> bool:
+    """Is d one of the layouts that ship with the program, not one the person saved."""
+    return d is _DEFAULT_LAYOUT or d is _COMPACT_LAYOUT
 
 
 def _dock_of(widget: QWidget) -> QDockWidget | None:
@@ -1532,8 +1547,6 @@ class MainWindow(QMainWindow):
             self._controls._wf.set_accent(None)
             self._eq_panel.set_accent(None)
             self._dsp_panel.set_accent(None)
-            self._waterfall.set_accent(None)
-            self._online.set_accent(None)
             np = getattr(self, "_np_widget", None)
             if np is not None:
                 np.set_accent(None)
@@ -1982,7 +1995,7 @@ class MainWindow(QMainWindow):
         try:
             self._saved = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
-            self._saved = _DEFAULT_LAYOUT  # no saved state, use the baked default
+            self._saved = _first_layout()  # no saved state, use the baked default
         try:
             self._restore_dock_layout(self._saved)
             self._place_new_panels(self._saved)
@@ -2000,9 +2013,13 @@ class MainWindow(QMainWindow):
         for dock in (self._wf_dock, self._online_dock, self._devices_dock, self._dsp_dock):
             if not state or dock.objectName().encode("utf-16-be") not in state:
                 self._new_panels.append(dock.windowTitle())
-                dock.setVisible(d is _DEFAULT_LAYOUT and dock not in (self._devices_dock, self._dsp_dock))
+                dock.setVisible(_baked(d) and dock not in (self._devices_dock, self._dsp_dock))
         if self._dsp_dock.windowTitle() in self._new_panels and not self._eq_dock.isFloating():
             self.tabifyDockWidget(self._eq_dock, self._dsp_dock)     # opens next to the equalizer, not in a column of its own
+        if d is _COMPACT_LAYOUT:
+            for dock in self.findChildren(QDockWidget):
+                if dock.windowTitle() == "Playlist":
+                    dock.raise_()       # the compact layout was saved on its Settings tab; a new install opens on the songs
 
     def _restore_dock_layout(self, d: dict):
         """The window geometry and the docked panels. Floating ones are set up by _restore_floating."""
@@ -2108,7 +2125,7 @@ class MainWindow(QMainWindow):
                     self._milkdrop.set_pending_preset(mp)
             if not d.get("seekbar_visible", True):
                 self._np_widget._set_seekbar_visible(False)
-            if self._new_panels and d is not _DEFAULT_LAYOUT:
+            if self._new_panels and not _baked(d):
                 self._show_status("New panels in the View menu: " + ", ".join(self._new_panels), 10000)
             if d.get("shuffle", False):
                 self._player.shuffle = True
