@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QPushButton, QFileDialog, QComboBox,
     QMessageBox, QFontComboBox, QLineEdit, QColorDialog, QPlainTextEdit,
 )
-from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPolygonF
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPalette, QPen, QPolygonF
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaDevices
 
 from artists import DEFAULT_EXCEPTIONS, configure as configure_artists
@@ -125,13 +125,16 @@ def _row(sl, lbl):
 _LABEL_W = 108  # shared label column width, so every tab lines up
 
 
+_DISCORD_LINKS = (("Create an app in the Discord Developer Portal", "https://discord.com/developers/applications"),
+                  ("Discord's Rich Presence guide", "https://docs.discord.com/developers/platform/rich-presence"))
+
 _INLINE_MAX = 30    # a hint longer than this sits behind a ? button instead of under its setting
 
 
 class _HelpPopup(QFrame):
     """The long explanation of a setting, in a small bubble that closes on the next click or on Esc."""
 
-    def __init__(self, text: str, anchor: QWidget):
+    def __init__(self, text: str, anchor: QWidget, links=()):
         super().__init__(anchor.window(), Qt.Popup)
         self.setObjectName("settings_help")
         self.setFrameShape(QFrame.StyledPanel)
@@ -143,7 +146,19 @@ class _HelpPopup(QFrame):
         lbl.setFixedWidth(300)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
         lay.addWidget(lbl)
+        lbl.ensurePolished()
+        link = "#8ab4f8" if lbl.palette().windowText().color().lightness() > 128 else "#1a5fb4"    # readable on dark and light
+        for label, url in links:                    # pages that say more, opened in the browser
+            a = QLabel(f'<a href="{url}"><span style="color:{link}">{label}</span></a>')
+            a.setTextFormat(Qt.RichText)
+            a.setWordWrap(True)
+            a.setFixedWidth(300)
+            a.setCursor(Qt.PointingHandCursor)
+            a.setToolTip(url)
+            a.linkActivated.connect(self._go)
+            lay.addWidget(a)
         self.adjustSize()
         screen = anchor.screen().availableGeometry()
         below = anchor.mapToGlobal(QPoint(0, anchor.height() + 4))
@@ -153,13 +168,18 @@ class _HelpPopup(QFrame):
             y = anchor.mapToGlobal(QPoint(0, 0)).y() - self.height() - 4
         self.move(x, max(screen.top() + 4, y))
 
+    def _go(self, url: str):
+        QDesktopServices.openUrl(QUrl(url))
+        self.close()
+
 
 class _HelpButton(QAbstractButton):
     """A small ? that opens the long explanation of the setting next to it."""
 
-    def __init__(self, text: str, parent=None):
+    def __init__(self, text: str, parent=None, links=()):
         super().__init__(parent)
         self._text = text
+        self._links = tuple(links)
         self.setFixedSize(18, 18)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)
@@ -169,7 +189,7 @@ class _HelpButton(QAbstractButton):
         self.clicked.connect(self._open)
 
     def _open(self):
-        _HelpPopup(self._text, self).show()
+        _HelpPopup(self._text, self, self._links).show()
 
     def enterEvent(self, e):
         self.update()
@@ -217,7 +237,7 @@ class _SectionHead(QWidget):
     body when it is clicked (or Space or Enter is pressed on it) and says so through `toggled`."""
     toggled = Signal(bool)
 
-    def __init__(self, text: str, help_text: str = "", fold: bool | None = None, minor: bool = False):
+    def __init__(self, text: str, help_text: str = "", fold: bool | None = None, minor: bool = False, links=()):
         super().__init__()
         self._fold = fold is not None
         self._arrow = _Arrow(not fold) if self._fold else None
@@ -239,7 +259,7 @@ class _SectionHead(QWidget):
         lay.addWidget(hdr)
         lay.addStretch(1)
         if help_text:
-            lay.addWidget(_HelpButton(help_text))
+            lay.addWidget(_HelpButton(help_text, links=links))
 
     def _flip(self):
         self._arrow.open = not self._arrow.open
@@ -257,7 +277,7 @@ class _SectionHead(QWidget):
             super().keyPressEvent(e)
 
 
-def _field(form, text, field, help=""):
+def _field(form, text, field, help="", links=()):
     """A labelled row; field is a widget or a layout. With help, a ? sits after the label."""
     lbl = QLabel(text)
     lbl.setMinimumWidth(_LABEL_W)
@@ -267,7 +287,7 @@ def _field(form, text, field, help=""):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(4)
         h.addWidget(lbl)
-        h.addWidget(_HelpButton(help))
+        h.addWidget(_HelpButton(help, links=links))
         h.addStretch(1)
         lbl = cell
     form.addRow(lbl, field)
@@ -322,18 +342,18 @@ def _hint(text):
     return lbl
 
 
-def _check(chk, hint=""):
+def _check(chk, hint="", links=()):
     """A checkbox spanning the row. A short hint (or a label that changes, such as a status) sits tucked under it,
     a long one is behind a ? at the end of the row."""
     if not hint:
         return chk
     box = QWidget()
-    if isinstance(hint, str) and len(hint) > _INLINE_MAX:
+    if isinstance(hint, str) and (len(hint) > _INLINE_MAX or links):
         h = QHBoxLayout(box)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
         h.addWidget(chk, 1)
-        h.addWidget(_HelpButton(hint))
+        h.addWidget(_HelpButton(hint, links=links))
         return box
     v = QVBoxLayout(box)
     v.setContentsMargins(0, 0, 0, 0)
@@ -1148,14 +1168,17 @@ class SettingsWidget(QWidget):
         self._discord_enable.setChecked(c.get("discord_rpc_enabled", False))
         self._discord_enable.toggled.connect(lambda _: self._apply_discord())
         form.addRow(_check(self._discord_enable,
-                           "Needs the Discord desktop app running. Album art needs the Art URL under Advanced."))
+                           "Needs the Discord desktop app running, and an application of your own made in "
+                           "Discord's Developer Portal (its Application ID goes in App ID below). Album art needs "
+                           "the Art URL under Advanced.", links=_DISCORD_LINKS))
 
         self._discord_client_id = QLineEdit(c.get("discord_client_id", ""))
         self._discord_client_id.setPlaceholderText("Application client ID")
         self._discord_client_id.editingFinished.connect(self._apply_discord)
         _field(form, "App ID", self._discord_client_id,
-               help="The Application ID of an application you made at discord.com/developers. Discord needs it "
-                    "to show your music.")
+               help="Discord needs an application of your own to show your music. Make one in the Developer Portal "
+                    "(New Application), then copy its Application ID from General Information and paste it here.",
+               links=_DISCORD_LINKS)
 
         adv = _section(form, "Advanced", minor=True,
                        fold=not (c.get("discord_art_base_url") or c.get("discord_art_upload_cmd")),
