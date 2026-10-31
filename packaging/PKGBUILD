@@ -3,7 +3,7 @@
 #   makepkg -si -p packaging/PKGBUILD
 # After that it is a normal package: start it from the menu, remove it with `pacman -R audiocrate`.
 pkgname=audiocrate
-pkgver=1.7.1       # keep in sync with core/_version.py
+pkgver=1.7.2       # keep in sync with core/_version.py
 pkgrel=1
 pkgdesc="Audio player with live DSP, parametric EQ, visualizers and chiptune support"
 arch=('any')

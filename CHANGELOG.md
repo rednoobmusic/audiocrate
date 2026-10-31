@@ -1,6 +1,6 @@
 # AudioCrate changelog
 
-## Unreleased
+## 1.7.2 (2026-10-31)
 
 ### Added
 - A click on a line of synced lyrics jumps to that part of the song. The pointer turns into a hand over lyrics that are synced, and the highlight moves at once, also while the song is paused.
