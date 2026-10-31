@@ -26,6 +26,8 @@ cp "$SRC"/panels/*.py "$APPBUILD/panels/"
 for _so in libfurnace_wrap.so libsid_wrap.so; do
     [ -f "$SRC/$_so" ] && cp "$SRC/$_so" "$APPBUILD/"
 done
+# projectM 4 for systems that only have projectM 3, built by packaging/build_native.sh
+[ -d "$SRC/linuxlibs" ] && cp -r "$SRC/linuxlibs" "$APPBUILD/"
 
 # Drop bytecode carried over from the working tree: a stale .pyc for a module
 # that has since been renamed or deleted would otherwise ship (and still be
@@ -75,12 +77,12 @@ AudioCrate $VER for Linux
 The installer checks for and offers to install the dependencies:
 PySide6, numpy, scipy, mutagen, pillow, ffmpeg.
 Optional:
-  libsidplayfp  C64 SID playback (.sid/.psid/.rsid) with subsongs
   libgme        NSF/SPC/GBS/VGM/AY/GYM/HES/KSS/SAP playback
   openmpt123    tracker modules (MOD/XM/IT/S3M and ~40 more)
   zxtune123     AY/YM + native ZX Spectrum formats
-  libprojectm   Milkdrop visualizer
   pypresence    Discord Rich Presence
+C64 SID playback, Furnace (.fur) files and the Milkdrop visualizer come with the release.
+Furnace files also use SDL2, libsndfile and ALSA, which most desktops have.
 
 SID song lengths: drop an HVSC Songlengths.md5 at
   ~/.config/audiocrate/Songlengths.md5
