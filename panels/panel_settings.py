@@ -19,6 +19,8 @@ from artists import DEFAULT_EXCEPTIONS, configure as configure_artists
 from player import device_key
 import anim
 import plat_paths
+import theme_presets
+from theme_picker import ThemePicker
 
 _CFG_FILE = plat_paths.config_dir() / "settings.json"
 
@@ -52,6 +54,7 @@ _DEFAULTS = {
     "text_color":        "",          # "" = auto (default foreground)
     "frame_shade":       0,
     "panel_borders":     True,
+    "corner_radius":     4,           # px, buttons, fields, menus and tooltips of AudioCrate's own theme
     "theme_style":       "default",    # or "aero"
     "waterfall":         {},           # the Waterfall panel's own settings (panel_waterfall.DEFAULTS)
     "waterfall_presets": {},
@@ -744,56 +747,58 @@ class SettingsWidget(QWidget):
         self._swatch_updaters = {}   # key: fn that repaints a colour swatch
 
         _section(form, "Theme")
-        self._system_theme_chk = QCheckBox("Use system style and colours")
-        self._system_theme_chk.setChecked(self._cfg.get("system_theme", True))
-        self._system_theme_chk.setToolTip(
-            "When enabled, uses your OS theme instead of AudioCrate's own colours.")
-        self._system_theme_chk.toggled.connect(self._apply_system_theme)
-        form.addRow(self._system_theme_chk)
+        self._theme_picker = ThemePicker()
+        self._theme_picker.chosen.connect(self._choose_theme)
+        form.addRow(self._theme_picker)
 
-        self._art_color_chk = QCheckBox("Derive theme from album art")
+        self._art_color_chk = QCheckBox("Colours follow the album art")
         self._art_color_chk.setChecked(self._cfg["art_color_theme"])
         self._art_color_chk.toggled.connect(lambda _: self._apply_appearance())
         form.addRow(_check(self._art_color_chk,
-                           "Falls back to the colours below when no art is available."))
+                           "Takes the colours of the theme from the cover of the song that is playing and changes "
+                           "them with it. A song without a cover uses the theme chosen above."))
 
-        self._style_combo = QComboBox()
-        self._style_combo.addItems(["Default", "Frutiger Aero"])
-        self._style_combo.setCurrentIndex(1 if self._cfg.get("theme_style") == "aero" else 0)
-        self._style_combo.currentIndexChanged.connect(lambda _: self._apply_theme_style())
-        _field(form, "Style", self._style_combo,
-               help="The look of AudioCrate's own theme (used when \u201cUse system style and colours\u201d is off): "
-                    "glass title bars and buttons with a bright rim, in sky blue or the album art colours.")
-
-        self._titlebar_chk = QCheckBox("Use AudioCrate title bars")
-        self._titlebar_chk.setChecked(self._cfg.get("custom_titlebar", True))
-        self._titlebar_chk.toggled.connect(self._apply_custom_titlebar)
-        form.addRow(_check(self._titlebar_chk, "Restart to apply."))
-
-        form = _section(form, "Colours", fold=self._system_theme_chk.isChecked(),
-                        help="Accent, background and text are used by AudioCrate's own theme, when "
-                             "\u201cUse system style and colours\u201d is off.")
-        own = []                                    # what only AudioCrate's own theme uses
+        custom = theme_presets.current(self._cfg) == "custom"
+        cust = _section(form, "Customize", minor=True, fold=not custom,
+                        help="Change the colours of the theme yourself. Accent is the colour of the highlights, "
+                             "Background and Text set the rest. Auto lets AudioCrate choose. Colours and corners "
+                             "belong to AudioCrate's own themes, so they are grey while System is chosen.")
+        own = []                                    # what only AudioCrate's own themes use
         for label, key, title, auto in (("Accent", "accent_color", "Accent colour", False),
                                         ("Background", "bg_color", "Background colour", True),
                                         ("Text", "text_color", "Text colour", True)):
             row = self._color_row(key, title, auto=auto)
-            own.append(_field(form, label, row))
+            own.append(_field(cust, label, row))
             own += [row.itemAt(i).widget() for i in range(row.count())]
+
+        self._radius_sl, self._radius_lbl = _hslider(0, 12, self._cfg.get("corner_radius", 4), " px")
+        self._radius_timer = QTimer(self)           # restyling the window is not cheap, so a drag waits for a pause
+        self._radius_timer.setSingleShot(True)
+        self._radius_timer.setInterval(150)
+        self._radius_timer.timeout.connect(self._apply_theme_style)
+        self._radius_sl.valueChanged.connect(lambda _: self._radius_timer.start())
+        own.append(_field(cust, "Corners", _row(self._radius_sl, self._radius_lbl),
+                          help="How round the buttons, fields and menus are. 0 is square."))
+        own.append(self._radius_sl)
         self._own_theme_widgets = own
-        self._apply_own_theme_enabled(not self._system_theme_chk.isChecked())
 
         self._shade_sl, self._shade_lbl = _hslider(0, 100, self._cfg.get("frame_shade", 0), "%")
         self._shade_sl.setToolTip("Shades panel title bars with a gradient for depth.")
         self._shade_sl.sliderReleased.connect(self._apply_theme_style)
-        _field(form, "Frame shading", _row(self._shade_sl, self._shade_lbl))
+        _field(cust, "Frame shading", _row(self._shade_sl, self._shade_lbl))
 
         self._borders = QCheckBox("Borders between panels")
         self._borders.setChecked(self._cfg.get("panel_borders", True))
         self._borders.setToolTip("The lines around and between panels, tabs and title bars. "
                                  "Off gives a flatter look.")
         self._borders.toggled.connect(lambda _: self._apply_theme_style())
-        form.addRow(_check(self._borders, "Off gives a flatter look."))
+        cust.addRow(_check(self._borders, "Off gives a flatter look."))
+
+        self._titlebar_chk = QCheckBox("Use AudioCrate title bars")
+        self._titlebar_chk.setChecked(self._cfg.get("custom_titlebar", True))
+        self._titlebar_chk.toggled.connect(self._apply_custom_titlebar)
+        form.addRow(_check(self._titlebar_chk, "Restart to apply."))
+        self._sync_theme_ui()
 
         form = _section(form, "Text")
         self._font_btn = QPushButton(self._font_name(self._cfg.get("text_font", "")))
@@ -845,7 +850,7 @@ class SettingsWidget(QWidget):
                 btn.setText(val)
                 btn.setStyleSheet(
                     f"background:{val}; color:{_contrast(val)}; "
-                    f"border:1px solid #00000080; border-radius:4px;")
+                    f"border:1px solid #8c8c8caa; border-radius:4px;")
 
         def pick():
             from PySide6.QtGui import QColor
@@ -867,11 +872,35 @@ class SettingsWidget(QWidget):
         row.addWidget(btn, 1); row.addWidget(reset)
         return row
 
+    def _sync_theme_ui(self):
+        """The picker, the greyed rows and the sliders, from the settings: after a preset was chosen, a config was
+        imported or the settings were reset."""
+        self._theme_picker.select(theme_presets.current(self._cfg))
+        self._apply_own_theme_enabled(not self._cfg["system_theme"])
+        for update in self._swatch_updaters.values():
+            update()
+        self._radius_sl.blockSignals(True)
+        self._radius_sl.setValue(self._cfg.get("corner_radius", 4))
+        self._radius_sl.blockSignals(False)
+        self._radius_lbl.setText(f"{self._radius_sl.value()} px")
+
+    def sync_theme(self):
+        """For MainWindow, after it has put other settings in place (an imported config)."""
+        self._sync_theme_ui()
+
+    def _choose_theme(self, key: str):
+        self._cfg.update(theme_presets.settings_for(key))
+        self.save()
+        self._sync_theme_ui()
+        self._apply_system_theme(self._cfg["system_theme"])
+        self._apply_theme_style()
+
     def _apply_theme_style(self):
         self._cfg["frame_shade"] = self._shade_sl.value()
         self._cfg["panel_borders"] = self._borders.isChecked()
-        self._cfg["theme_style"] = "aero" if self._style_combo.currentIndex() == 1 else "default"
+        self._cfg["corner_radius"] = self._radius_sl.value()
         self.save()
+        self._theme_picker.select(theme_presets.current(self._cfg))
         self.theme_style_changed.emit({
             "accent":      self._cfg.get("accent_color", "#8040c8"),
             "bg":          self._cfg.get("bg_color", ""),
@@ -879,6 +908,7 @@ class SettingsWidget(QWidget):
             "frame_shade": self._cfg["frame_shade"],
             "borders":     self._cfg["panel_borders"],
             "style":       self._cfg["theme_style"],
+            "radius":      self._cfg["corner_radius"],
         })
 
     def _apply_own_theme_enabled(self, on: bool):
@@ -1532,10 +1562,8 @@ class SettingsWidget(QWidget):
         # Lyrics
         self._lyr_font_sl.setValue(self._cfg["lyr_font_size"])
         # Appearance
-        self._system_theme_chk.blockSignals(True)
-        self._system_theme_chk.setChecked(self._cfg["system_theme"])
-        self._system_theme_chk.blockSignals(False)
         self._art_color_chk.setChecked(self._cfg["art_color_theme"])
+        self._sync_theme_ui()
         # Force the theme to re-apply even when the checkbox value didn't change
         # (setChecked emits no signal if already in that state), otherwise a reset
         # could leave a previously-applied art/app theme showing while the box
@@ -1548,9 +1576,6 @@ class SettingsWidget(QWidget):
         self._shade_sl.setValue(self._cfg["frame_shade"])
         self._borders.setChecked(self._cfg["panel_borders"])
         self._anim_chk.setChecked(self._cfg["animations"])
-        self._style_combo.blockSignals(True)
-        self._style_combo.setCurrentIndex(1 if self._cfg["theme_style"] == "aero" else 0)
-        self._style_combo.blockSignals(False)
         # Playback
         self._xfade_sl.setValue(self._cfg["crossfade_ms"] // 1000)
         self._video_dsp_chk.setChecked(self._cfg["video_dsp"])

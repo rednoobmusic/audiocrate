@@ -12,7 +12,7 @@ widget, see ui/main_window.py).
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QMenu, QMenuBar, QSizePolicy, QWidget
 
 HEIGHT = 34
@@ -22,6 +22,19 @@ shade = 0          # the "Frame shading" setting, 0 to 100: a gradient from ligh
 _GRIP = 5        # resize strip along each edge, px
 _CORNER = 10     # and the square at each corner
 _DRAG_PX = 4     # how far a press must travel before it becomes a move
+
+
+def _tinted(pm: QPixmap, color: QColor) -> QPixmap:
+    """pm with everything that is drawn in it filled with color."""
+    out = QPixmap(pm.size())
+    out.setDevicePixelRatio(pm.devicePixelRatio())
+    out.fill(Qt.transparent)
+    q = QPainter(out)
+    q.drawPixmap(0, 0, pm)
+    q.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    q.fillRect(out.rect(), color)
+    q.end()
+    return out
 
 
 def bar_background(pal) -> QColor:
@@ -161,7 +174,10 @@ class TitleBar(QWidget):
 
         icon = self._win.windowIcon()
         if not icon.isNull():
-            p.drawPixmap(10, (self.height() - 18) // 2, icon.pixmap(18, 18))
+            pm = icon.pixmap(18, 18)
+            if bar_background(pal).lightness() > 150:       # the logo is white, so on a light bar it takes the text colour
+                pm = _tinted(pm, QColor(pal.windowText().color()))
+            p.drawPixmap(10, (self.height() - 18) // 2, pm)
 
         # the title goes in the space between the menus and the buttons
         left = (self.menubar.geometry().right() if self.menubar is not None else HEIGHT) + 12

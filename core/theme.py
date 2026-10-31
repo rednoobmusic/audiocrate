@@ -72,7 +72,7 @@ QPushButton {{
     background: {bg3};
     color: {fg};
     border: 1px solid {border};
-    border-radius: 4px;
+    border-radius: {r}px;
     padding: 5px 12px;
     min-width: 28px;
 }}
@@ -98,7 +98,7 @@ QSlider::sub-page:horizontal {{ background: {accent_d}; border-radius: 2px; }}
 QLineEdit, QTextEdit {{
     background: {bg2};
     border: 1px solid {border};
-    border-radius: 3px;
+    border-radius: {r_s}px;
     padding: 4px 8px;
     color: {fg};
     selection-background-color: {sel};
@@ -134,7 +134,7 @@ QMenuBar {{ background: {bg}; border-bottom: 1px solid {panel_border}; }}
 QMenuBar::item {{ padding: 4px 10px; }}
 QMenuBar::item:selected {{ background: {bg3}; }}
 QMenu {{ background: {bg2}; border: 1px solid {border}; padding: 4px; }}
-QMenu::item {{ padding: 5px 24px 5px 12px; border-radius: 3px; }}
+QMenu::item {{ padding: 5px 24px 5px 12px; border-radius: {r_s}px; }}
 QMenu::item:selected {{ background: {sel}; }}
 QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}
 QLabel#settings_section {{ color: {accent_l}; font-weight: bold; }}
@@ -146,15 +146,15 @@ QCheckBox::indicator {{
     width: 14px; height: 14px;
     background: {bg2};
     border: 1px solid {border};
-    border-radius: 3px;
+    border-radius: {r_s}px;
 }}
 QCheckBox::indicator:hover {{ border-color: {accent}; }}
-QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent_l}; }}
+QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent_l}; image: {tick}; }}
 QComboBox {{
     background: {bg2};
     color: {fg};
     border: 1px solid {border};
-    border-radius: 3px;
+    border-radius: {r_s}px;
     padding: 3px 6px;
     selection-background-color: {sel};
 }}
@@ -177,7 +177,7 @@ QToolTip {{
     color: {fg};
     border: 1px solid {accent};
     padding: 4px 8px;
-    border-radius: 4px;
+    border-radius: {r}px;
     font-size: 12px;
 }}
 """
@@ -200,7 +200,8 @@ _DEFAULT_PALETTE = {
 _DEFAULT_UI_SIZE = 13
 DEFAULT_ACCENT = _DEFAULT_PALETTE["accent"]
 
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 
 def _hsv(h: int, s: int, v: int) -> QColor:
@@ -208,6 +209,41 @@ def _hsv(h: int, s: int, v: int) -> QColor:
     c = QColor()
     c.setHsv(max(0, h), max(0, min(255, s)), max(0, min(255, v)))
     return c
+
+
+def _tick(color: str) -> str:
+    """A check mark in color as a PNG in the cache folder, as a url() for the checked boxes. A stylesheet cannot draw one,
+    and a box filled with the accent and nothing else does not read as checked. "none" if the file cannot be made."""
+    try:
+        import plat_paths
+        folder = plat_paths.cache_dir() / "theme"
+        f = folder / f"tick-{QColor(color).name()[1:]}.png"
+        if not f.exists():
+            folder.mkdir(parents=True, exist_ok=True)
+            img = QImage(14, 14, QImage.Format_ARGB32)
+            img.fill(Qt.transparent)
+            q = QPainter(img)
+            q.setRenderHint(QPainter.Antialiasing)
+            q.setPen(QPen(QColor(color), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            q.drawLine(3.5, 7.5, 6, 10)
+            q.drawLine(6, 10, 10.5, 4.5)
+            q.end()
+            if not img.save(str(f)):
+                return "none"
+        return f'url("{f.as_posix()}")'
+    except Exception:
+        return "none"
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    """The colour a fraction t of the way from a to b."""
+    ca, cb = QColor(a), QColor(b)
+    return QColor(round(ca.red() + (cb.red() - ca.red()) * t), round(ca.green() + (cb.green() - ca.green()) * t),
+                  round(ca.blue() + (cb.blue() - ca.blue()) * t)).name()
+
+
+def is_light(color: str) -> bool:
+    return QColor(color).lightness() > 150
 
 
 def make_qss(
@@ -220,6 +256,7 @@ def make_qss(
     frame_shade: int = 0,
     borders: bool = True,
     style: str = "default",
+    radius: int = 4,
 ) -> str:
     """Build the stylesheet for AudioCrate's own (non-system) theme.
 
@@ -231,7 +268,11 @@ def make_qss(
     borders     False makes the lines between panels (title underlines, tab frames,
                 splitter handles, dock separators) transparent.
     palette     album-art palette (full dict); overrides accent/bg/text.
-    style       "aero" for the Frutiger Aero look (theme_aero.py); frame_shade does not apply.
+    style       "aero" for the Frutiger Aero look (theme_aero.py); frame_shade and radius do not apply.
+    radius      corner radius in px of buttons, fields, menus and tooltips (4 is the look it always had).
+
+    A bg that is light makes a light theme: the lists and fields are a touch whiter than the window, buttons and lines a
+    touch darker, the selection and hover colours pale tints of the accent, and the text dark unless text says otherwise.
     """
     if style == "aero":
         import theme_aero
@@ -254,7 +295,19 @@ def make_qss(
         # An explicit background wins. Otherwise a custom accent also tints the
         # background (dark shades of the accent's hue), so it changes the whole
         # window and not just the highlights.
-        if bg:
+        if bg and is_light(bg):
+            bb = QColor(bg)
+            h, s, v, _ = bb.getHsv()
+            ac = QColor(accent or DEFAULT_ACCENT).name()
+            fg = QColor(text).name() if text else _hsv(h, min(s, 60), 38).name()
+            merged.update({
+                "bg": bb.name(), "bg2": _mix(bg, "#ffffff", 0.6), "bg3": _mix(bg, "#000000", 0.07),
+                "border": _mix(bg, "#000000", 0.2),
+                "accent": ac, "accent_l": QColor(ac).darker(125).name(), "accent_d": _mix(ac, bg, 0.72),
+                "sel": _mix(ac, bg, 0.8),
+                "fg": fg, "fg_dim": _mix(fg, bg, 0.3), "fg_dimmer": _mix(fg, bg, 0.55),
+            })
+        elif bg:
             bb = QColor(bg)
             h, s, v, _ = bb.getHsv()
             merged["bg"]     = bb.name()
@@ -269,7 +322,7 @@ def make_qss(
             merged["bg3"]    = _hsv(h, s, 34).name()
             merged["border"] = _hsv(h, s, 64).name()
 
-        if text:
+        if text and not (bg and is_light(bg)):
             tc = QColor(text)
             merged["fg"]        = tc.name()
             merged["fg_dim"]    = tc.darker(135).name()
@@ -297,7 +350,8 @@ def make_qss(
     # chosen font first; the bundled Nerd Font after it still supplies the icon glyphs
     tf = f'"{text_font}", ' if text_font else ""
     sz = ui_size if ui_size is not None else _DEFAULT_UI_SIZE
-    return _QSS_TEMPLATE.format(**p, text_font=tf, ui_size=sz)
+    r = max(0, min(16, int(radius)))
+    return _QSS_TEMPLATE.format(**p, text_font=tf, ui_size=sz, r=r, r_s=max(0, r - 1), tick=_tick(p["bg"]))
 
 
 QSS = make_qss()

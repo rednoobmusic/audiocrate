@@ -1088,6 +1088,7 @@ class MainWindow(QMainWindow):
             frame_shade=s.get("frame_shade", 0),
             borders=bool(s.get("panel_borders", True)),
             style=s.get("theme_style", "default"),
+            radius=int(s.get("corner_radius", 4)),
         )
 
     def _on_theme_style_changed(self, d: dict):
@@ -2205,6 +2206,7 @@ class MainWindow(QMainWindow):
             self._settings.save()
             self._apply_settings()
             self._settings.show_artist_options()
+            self._settings.sync_theme()
             self._on_artist_split_changed()
             self._set_app_qss(self._make_qss())
         if "ui_state" in bundle:

@@ -2,6 +2,10 @@
 
 ## 1.7.1 (2026-10-30)
 
+### Added
+- A theme picker at the top of Settings, Appearance: eighteen themes as cards, each painted in its own colours. System follows your desktop, AudioCrate and Frutiger Aero are the two looks that were there, and there are eleven dark and four light ones (Midnight, Black, Nord, Dracula, Gruvbox, Solarized, Tokyo Night, Rosé Pine, Catppuccin, Forest, Crimson, Light, Paper, Latte). A click applies it at once. Customize under it still sets the accent, background and text yourself, and has a new Corners setting for how round the buttons, fields and menus are. "Colours follow the album art" is its own box now.
+- Checked boxes show a check mark in the themes of their own, and the logo in the title bar takes the text colour on a light theme.
+
 ### Changed
 - Settings is easier to take in. The long explanations under settings are behind a small ? next to the setting now, and a click on it opens the text. Sections that most people never need are folded until you open them: Oscilloscope, Colours, Artist names, Logs, Lighting, Backup and reset, Discord, and Last.fm and Libre.fm until you turn them on. The colour rows grey out while the system style is in use.
 
