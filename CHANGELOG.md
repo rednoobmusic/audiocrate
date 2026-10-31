@@ -1,5 +1,17 @@
 # AudioCrate changelog
 
+## 1.7.1 (2026-10-30)
+
+### Fixed
+- The player did not start where PySide6 comes without QtMultimediaWidgets, which Debian ships as a package of its own. The picture of a video is now painted from Qt's video sink when that part is missing.
+- The player did not start on Qt older than 6.8, which has no sound tap for video. Video then plays through Qt's own sound output, without the EQ and DSP chain.
+- Without QtDBus the player no longer stops at start up. The media keys are off instead.
+- The icons on the control buttons were empty boxes on Qt 6.6 and older, which do not find the glyphs of the bundled font by themselves.
+- Furnace (`.fur`) and SID files did not play on Debian, Ubuntu and Fedora. The Furnace library asked for a newer glibc than those have, and the SID library for a libsidplayfp they do not ship. Both are built on Debian 12 now, with libsidplayfp linked in, and `packaging/build_native.sh` does it.
+- `libgme` was not found on Debian, Ubuntu and Fedora, which only ship `libgme.so.0`, so VGM, NSF and SPC files did not play.
+- The Milkdrop visualizer needs projectM 4, and Debian, Ubuntu and Fedora ship projectM 3. The Linux release now carries projectM 4 and uses it when the system has none. Where Milkdrop cannot start, the panel says why and the other visualizers go on working.
+- The Linux installer named PySide6 packages that Debian does not have. It now lists the Qt parts, says which optional ones are missing, and takes a virtual environment through `AUDIOCRATE_PYTHON`.
+
 ## 1.7.0 (2026-10-30)
 
 ### Added
