@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 import threading
+from bisect import bisect_right
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -174,6 +175,8 @@ class _AnimState:
 
 
 class _LyricsCanvas(QWidget):
+    line_clicked = Signal(int)          # a click on a line of synced lyrics: its index
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._lines:      list[str]       = []
@@ -182,6 +185,7 @@ class _LyricsCanvas(QWidget):
         self._font_size:  int             = 18
         self._synced:     bool            = False
         self._row_tops:   list[int]       = []
+        self._row_heights: list[int]      = []
         self._anim_states: list[_AnimState] = []
         self._anim_t:     float           = 0.0
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -198,6 +202,10 @@ class _LyricsCanvas(QWidget):
         self._prev_active = -1
         self._anim_states = [_AnimState() for _ in lines]
         self._anim_timer.stop()
+        if synced:
+            self.setCursor(Qt.PointingHandCursor)
+        else:
+            self.unsetCursor()
         self._relayout()
 
     def set_active(self, idx: int):
@@ -270,6 +278,7 @@ class _LyricsCanvas(QWidget):
         w     = max(1, self.width())
         avail = max(1, w - _PADDING_H * 2)
         tops  = []
+        heights = []
         y     = _PADDING_V
 
         for i, txt in enumerate(self._lines):
@@ -277,9 +286,11 @@ class _LyricsCanvas(QWidget):
             size = self._cur_size(i)
             bold = (not self._synced) or (i == self._active)
             font = self._make_font(size, bold)
-            y   += self._text_height(txt, font, avail) + _LINE_GAP
+            heights.append(self._text_height(txt, font, avail))
+            y   += heights[-1] + _LINE_GAP
 
         self._row_tops = tops
+        self._row_heights = heights
         self.setMinimumHeight(y + _PADDING_V)
         self.update()
 
@@ -299,6 +310,14 @@ class _LyricsCanvas(QWidget):
     def resizeEvent(self, e):
         self._relayout()
         super().resizeEvent(e)
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.LeftButton or not self._synced:
+            return super().mousePressEvent(e)
+        y = int(e.position().y())
+        i = bisect_right(self._row_tops, y) - 1             # the gap under a line counts as the line
+        if 0 <= i < len(self._lines) and y < self._row_tops[i] + self._row_heights[i] + _LINE_GAP:
+            self.line_clicked.emit(i)
 
     def paintEvent(self, _):
         if not self._lines:
@@ -349,6 +368,15 @@ class LyricsWidget(QWidget):
         self._lyrics_ready.connect(self._apply_lyrics)
         player.track_changed.connect(self._on_track_changed)
         player.position_changed.connect(self._on_position_changed)
+        self._canvas.line_clicked.connect(self._on_line_clicked)
+
+    def _on_line_clicked(self, idx: int):
+        dur = self._player.duration_ms
+        if dur <= 0:
+            return
+        ms = min(self._lines[idx][0] + 20, dur)             # a hair into the line, so the seek cannot land before it and light the line above
+        self._player.seek(ms / dur)
+        self._on_position_changed(0.0, ms, dur)             # also moves the highlight while paused
 
     def _on_track_changed(self, track):
         self._cur_idx = -2
@@ -477,7 +505,7 @@ class LyricsWidget(QWidget):
             self._no_lyr.show()
             return
 
-        self._synced = lines[0][0] > 0
+        self._synced = len(lines) > 1 or lines[0][0] > 0      # one line at 0:00 is plain text, but a first line at 0:00 is just a title line
         self._canvas.set_font_size(self._font_size)
         self._canvas.set_lines([txt for _, txt in lines], self._synced)
         self._no_lyr.hide()

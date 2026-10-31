@@ -1,5 +1,13 @@
 # AudioCrate changelog
 
+## Unreleased
+
+### Added
+- A click on a line of synced lyrics jumps to that part of the song. The pointer turns into a hand over lyrics that are synced, and the highlight moves at once, also while the song is paused.
+
+### Fixed
+- Synced lyrics whose first line is stamped 0:00 (often a title line) were shown as plain text, without the highlight and the scrolling. They follow the song now like any other synced lyrics.
+
 ## 1.7.1 (2026-10-30)
 
 ### Added
