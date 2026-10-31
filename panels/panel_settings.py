@@ -217,7 +217,7 @@ class _SectionHead(QWidget):
     body when it is clicked (or Space or Enter is pressed on it) and says so through `toggled`."""
     toggled = Signal(bool)
 
-    def __init__(self, text: str, help_text: str = "", fold: bool | None = None):
+    def __init__(self, text: str, help_text: str = "", fold: bool | None = None, minor: bool = False):
         super().__init__()
         self._fold = fold is not None
         self._arrow = _Arrow(not fold) if self._fold else None
@@ -230,10 +230,11 @@ class _SectionHead(QWidget):
             self.setFocusPolicy(Qt.TabFocus)
             self.setAccessibleName(text)
         hdr = QLabel(text)
-        hdr.setObjectName("settings_section")
-        f = hdr.font()
-        f.setBold(True)
-        hdr.setFont(f)
+        if not minor:                               # a minor head is plain text, so it reads as part of the section above
+            hdr.setObjectName("settings_section")
+            f = hdr.font()
+            f.setBold(True)
+            hdr.setFont(f)
         hdr.setAttribute(Qt.WA_TransparentForMouseEvents)
         lay.addWidget(hdr)
         lay.addStretch(1)
@@ -284,21 +285,23 @@ def _new_form(w: QWidget, margins=(14, 12, 14, 14)) -> QFormLayout:
     return form
 
 
-def _section(form, text, help="", fold=None):
+def _section(form, text, help="", fold=None, minor=False):
     """Heading with a thin rule under it; the object names are styled in theme.py. With fold (True: closed at first,
     False: open) the section can be folded: what is added to the form this returns lands in its body, so the caller
-    carries on with `form = _section(...)`. Otherwise the form is returned as it was."""
+    carries on with `form = _section(...)`. Otherwise the form is returned as it was. A minor one is a plain
+    "Advanced" row that belongs to the section above: no rule, no bold heading, no gap."""
     form = getattr(form, "_page_form", form)
     box = QWidget()
     v = QVBoxLayout(box)
-    v.setContentsMargins(0, 0 if form.rowCount() == 0 else 10, 0, 0)
+    v.setContentsMargins(0, 0 if (minor or form.rowCount() == 0) else 10, 0, 0)
     v.setSpacing(4)
-    head = _SectionHead(text, help, fold)
-    rule = QFrame()
-    rule.setObjectName("settings_rule")
-    rule.setFrameShape(QFrame.HLine)
+    head = _SectionHead(text, help, fold, minor)
     v.addWidget(head)
-    v.addWidget(rule)
+    if not minor:
+        rule = QFrame()
+        rule.setObjectName("settings_rule")
+        rule.setFrameShape(QFrame.HLine)
+        v.addWidget(rule)
     form.addRow(box)
     if fold is None:
         return form
@@ -1139,13 +1142,13 @@ class SettingsWidget(QWidget):
 
     def _sec_discord(self, form):
         c = self._cfg
-        form = _section(form, "Discord Rich Presence", fold=not c.get("discord_rpc_enabled", False))
+        _section(form, "Discord Rich Presence")
 
         self._discord_enable = QCheckBox("Show my music on Discord")
         self._discord_enable.setChecked(c.get("discord_rpc_enabled", False))
         self._discord_enable.toggled.connect(lambda _: self._apply_discord())
         form.addRow(_check(self._discord_enable,
-                           "Needs the Discord desktop app running. Album art needs the art URL below."))
+                           "Needs the Discord desktop app running. Album art needs the Art URL under Advanced."))
 
         self._discord_client_id = QLineEdit(c.get("discord_client_id", ""))
         self._discord_client_id.setPlaceholderText("Application client ID")
@@ -1154,15 +1157,21 @@ class SettingsWidget(QWidget):
                help="The Application ID of an application you made at discord.com/developers. Discord needs it "
                     "to show your music.")
 
+        adv = _section(form, "Advanced", minor=True,
+                       fold=not (c.get("discord_art_base_url") or c.get("discord_art_upload_cmd")),
+                       help="Album art on Discord needs a public web address that serves the pictures (Art URL) and, "
+                            "when that address is on another computer, a command that uploads each picture there "
+                            "(Art upload). Most people can leave both empty.")
+
         self._discord_art_base = QLineEdit(c.get("discord_art_base_url", ""))
         self._discord_art_base.setPlaceholderText("Public base URL")
         self._discord_art_base.editingFinished.connect(self._apply_discord)
-        _field(form, "Art URL", self._discord_art_base, help="Public base URL that serves the album art.")
+        _field(adv, "Art URL", self._discord_art_base, help="Public base URL that serves the album art.")
 
         self._discord_art_upload = QLineEdit(c.get("discord_art_upload_cmd", ""))
         self._discord_art_upload.setPlaceholderText("Command, optional")
         self._discord_art_upload.editingFinished.connect(self._apply_discord)
-        _field(form, "Art upload", self._discord_art_upload,
+        _field(adv, "Art upload", self._discord_art_upload,
                help="If the Art URL is hosted elsewhere, this shell command uploads each art file there. {file} is "
                     "replaced with the local path (for example an scp or rsync command).")
 
