@@ -24,8 +24,13 @@ from collections import deque
 
 import numpy as np
 from PySide6.QtCore import QMetaObject, QObject, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtMultimedia import (QAudioBuffer, QAudioBufferOutput, QAudioFormat, QAudioSink,
+from PySide6.QtMultimedia import (QAudioBuffer, QAudioFormat, QAudioSink,
                                   QMediaDevices, QVideoSink)
+
+try:
+    from PySide6.QtMultimedia import QAudioBufferOutput
+except ImportError:                                 # Qt before 6.8 has no sound tap: the player keeps the sound of a video
+    QAudioBufferOutput = None
 
 from dsp_base import Context
 
@@ -850,6 +855,9 @@ class VideoAudio(QObject):
         self._releasing = False
         if not self.enabled or self.stage is None or not hasattr(self.stage, "process_external"):
             return False
+        if QAudioBufferOutput is None and self._tap_factory is None:
+            self.reason = "this Qt is older than 6.8, so the sound of a video does not go through the EQ and DSP chain"
+            return False
         try:
             self._ensure_worker()
             tap = self._ensure_tap()
@@ -962,7 +970,7 @@ class VideoAudio(QObject):
             self._pic.set_delay(hold)
             want = self._pic.sink
         else:
-            want = w
+            want = w.videoSink() if getattr(w, "plain", False) else w
             if self._pic is not None:
                 self._pic.set_delay(0.0)
                 self._pic.release()
