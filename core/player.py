@@ -385,6 +385,7 @@ class Player(QObject):
     chip_rendering     = Signal(bool)                  # True while a CLI render is in flight (loading state)
     chip_ready         = Signal(str)                   # rendered WAV path is ready (for the waveform bar)
     error              = Signal(str)                   # user-visible playback problem (shown in status bar)
+    ab_changed         = Signal()                      # the A-B loop was set, completed or cleared
     video_sound_changed = Signal(bool)                 # True: the sound of the video plays through our sink (the scope can read it)
     _chip_done         = Signal(int, object)           # (generation, wav or None), internal, worker to main thread
     _tags_filled       = Signal()                      # queue tags arrived from the background reader
@@ -467,6 +468,12 @@ class Player(QObject):
         self._vaudio = VideoAudio(self._media, self._out, self._dsp, parent=self)
         self._vaudio.active_changed.connect(self.video_sound_changed)
         self._vaudio.fell_back.connect(self._on_video_fell_back)
+
+        self._ab_a: int | None = None        # A-B loop points in ms, see ab_toggle
+        self._ab_b: int | None = None
+        self.position_changed.connect(self._ab_tick)
+        self.track_changed.connect(self.ab_clear)
+        self.subsong_changed.connect(self.ab_clear)
 
         self._next_timer = QTimer(self)      # see _set_engine_next
         self._next_timer.setSingleShot(True)
@@ -1512,6 +1519,33 @@ class Player(QObject):
         if dur > 0:
             self._media.setPosition(int(frac * dur))
             self._vaudio.seek()
+
+    @property
+    def ab_loop(self) -> tuple[int | None, int | None]:
+        return self._ab_a, self._ab_b
+
+    def ab_toggle(self):
+        """A-B repeat: the first call marks A at the playing position, the second marks B and starts the loop,
+        the third clears it."""
+        pos = self.position_ms
+        if self._ab_a is None:
+            if self.duration_ms <= 0:
+                return
+            self._ab_a = pos
+        elif self._ab_b is None and pos > self._ab_a + 200:
+            self._ab_b = pos
+        else:
+            self._ab_a = self._ab_b = None
+        self.ab_changed.emit()
+
+    def ab_clear(self, *_):
+        if self._ab_a is not None:
+            self._ab_a = self._ab_b = None
+            self.ab_changed.emit()
+
+    def _ab_tick(self, _frac, pos_ms, dur):
+        if self._ab_b is not None and pos_ms >= self._ab_b and dur > 0:
+            self.seek(self._ab_a / dur)
 
     def seek_delta(self, seconds: int):
         if self._vgm_active:

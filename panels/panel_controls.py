@@ -260,6 +260,13 @@ class ControlsWidget(QWidget):
         self._wand.setFont(_icon_font)
         self._wand.toggled.connect(self._player.set_enhance)
 
+        self._ab = QPushButton("A-B")
+        self._ab.setCheckable(True)
+        self._ab.setFixedSize(46, 30)
+        self._ab.clicked.connect(lambda: (self._player.ab_toggle(), self._on_ab()))
+        self._player.ab_changed.connect(self._on_ab)
+        self._on_ab()
+
         btn_row.addWidget(self._btn_prev)
         btn_row.addWidget(self._btn_play)
         btn_row.addWidget(self._btn_stop)
@@ -267,6 +274,7 @@ class ControlsWidget(QWidget):
         btn_row.addSpacing(12)
         btn_row.addWidget(self._btn_mode)
         btn_row.addWidget(self._btn_shf)
+        btn_row.addWidget(self._ab)
         btn_row.addSpacing(8)
         btn_row.addWidget(self._trim)
         btn_row.addWidget(self._wand)
@@ -310,6 +318,14 @@ class ControlsWidget(QWidget):
         elif cli_render.supported(ext):
             # rendered first, and chip_ready loads the shape: until then the track before must not stay up
             self._wf.clear()
+
+    def _on_ab(self):
+        a, b = self._player.ab_loop
+        self._ab.setChecked(b is not None)
+        self._ab.setText("A-" if a is not None and b is None else "A-B")
+        self._ab.setToolTip("Repeat a part of the track: click at the start, again at the end, a third time to clear" if a is None
+                            else "Click at the end of the part to repeat" if b is None
+                            else f"Repeating {_fmt(a)} to {_fmt(b)}. Click to clear")
 
     def _on_shuffle_toggle(self, on: bool):
         self._player.shuffle = on
