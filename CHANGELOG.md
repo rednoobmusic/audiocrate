@@ -2,6 +2,9 @@
 
 ## 1.7.1 (2026-10-30)
 
+### Changed
+- Settings is easier to take in. The long explanations under settings are behind a small ? next to the setting now, and a click on it opens the text. Sections that most people never need are folded until you open them: Oscilloscope, Colours, Artist names, Logs, Lighting, Backup and reset, Discord, and Last.fm and Libre.fm until you turn them on. The colour rows grey out while the system style is in use.
+
 ### Fixed
 - The player did not start where PySide6 comes without QtMultimediaWidgets, which Debian ships as a package of its own. The picture of a video is now painted from Qt's video sink when that part is missing.
 - The player did not start on Qt older than 6.8, which has no sound tap for video. Video then plays through Qt's own sound output, without the EQ and DSP chain.

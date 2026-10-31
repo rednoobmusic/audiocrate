@@ -5,14 +5,14 @@ import safe_write
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QAbstractButton,
     QStackedWidget, QButtonGroup, QGridLayout, QLabel, QSlider, QCheckBox,
     QScrollArea, QFrame,
     QSizePolicy, QPushButton, QFileDialog, QComboBox,
     QMessageBox, QFontComboBox, QLineEdit, QColorDialog, QPlainTextEdit,
 )
-from PySide6.QtGui import QPalette
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPolygonF
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtMultimedia import QMediaDevices
 
 from artists import DEFAULT_EXCEPTIONS, configure as configure_artists
@@ -125,30 +125,190 @@ def _row(sl, lbl):
 _LABEL_W = 108  # shared label column width, so every tab lines up
 
 
-def _field(form, text, field):
-    """A labelled row; field is a widget or a layout."""
+_INLINE_MAX = 30    # a hint longer than this sits behind a ? button instead of under its setting
+
+
+class _HelpPopup(QFrame):
+    """The long explanation of a setting, in a small bubble that closes on the next click or on Esc."""
+
+    def __init__(self, text: str, anchor: QWidget):
+        super().__init__(anchor.window(), Qt.Popup)
+        self.setObjectName("settings_help")
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setAutoFillBackground(True)
+        lbl = QLabel(plat_paths.breakable(text))
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.PlainText)
+        lbl.setFixedWidth(300)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.addWidget(lbl)
+        self.adjustSize()
+        screen = anchor.screen().availableGeometry()
+        below = anchor.mapToGlobal(QPoint(0, anchor.height() + 4))
+        x = max(screen.left() + 4, min(below.x() - 12, screen.right() - self.width() - 4))
+        y = below.y()
+        if y + self.height() > screen.bottom():                    # no room under the button: above it
+            y = anchor.mapToGlobal(QPoint(0, 0)).y() - self.height() - 4
+        self.move(x, max(screen.top() + 4, y))
+
+
+class _HelpButton(QAbstractButton):
+    """A small ? that opens the long explanation of the setting next to it."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self.setFixedSize(18, 18)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
+        self.setToolTip("What is this?")
+        self.setAccessibleName("Help")
+        self.setAccessibleDescription(text)
+        self.clicked.connect(self._open)
+
+    def _open(self):
+        _HelpPopup(self._text, self).show()
+
+    def enterEvent(self, e):
+        self.update()
+
+    def leaveEvent(self, e):
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        fg = QColor(self.palette().windowText().color())
+        fg.setAlpha(230 if (self.underMouse() or self.hasFocus() or self.isDown()) else 140)
+        p.setPen(QPen(fg, 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5))
+        f = self.font()
+        f.setBold(True)
+        f.setPixelSize(11)
+        p.setFont(f)
+        p.drawText(self.rect(), Qt.AlignCenter, "?")
+
+
+class _Arrow(QWidget):
+    """The triangle in front of a section that can be folded: down when it is open, right when it is closed."""
+
+    def __init__(self, is_open: bool):
+        super().__init__()
+        self.open = is_open
+        self.setFixedSize(10, 10)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        fg = QColor(self.palette().windowText().color())
+        fg.setAlpha(170)
+        p.setPen(Qt.NoPen)
+        p.setBrush(fg)
+        pts = ((1, 2.5), (9, 2.5), (5, 7.5)) if self.open else ((2.5, 1), (2.5, 9), (7.5, 5))
+        p.drawPolygon(QPolygonF([QPointF(x, y) for x, y in pts]))
+
+
+class _SectionHead(QWidget):
+    """A section's title with an optional ? at the right. A foldable one has an arrow in front, shows or hides its
+    body when it is clicked (or Space or Enter is pressed on it) and says so through `toggled`."""
+    toggled = Signal(bool)
+
+    def __init__(self, text: str, help_text: str = "", fold: bool | None = None):
+        super().__init__()
+        self._fold = fold is not None
+        self._arrow = _Arrow(not fold) if self._fold else None
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        if self._arrow is not None:
+            lay.addWidget(self._arrow)
+            self.setCursor(Qt.PointingHandCursor)
+            self.setFocusPolicy(Qt.TabFocus)
+            self.setAccessibleName(text)
+        hdr = QLabel(text)
+        hdr.setObjectName("settings_section")
+        f = hdr.font()
+        f.setBold(True)
+        hdr.setFont(f)
+        hdr.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lay.addWidget(hdr)
+        lay.addStretch(1)
+        if help_text:
+            lay.addWidget(_HelpButton(help_text))
+
+    def _flip(self):
+        self._arrow.open = not self._arrow.open
+        self._arrow.update()
+        self.toggled.emit(self._arrow.open)
+
+    def mousePressEvent(self, e):
+        if self._fold and e.button() == Qt.LeftButton:
+            self._flip()
+
+    def keyPressEvent(self, e):
+        if self._fold and e.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self._flip()
+        else:
+            super().keyPressEvent(e)
+
+
+def _field(form, text, field, help=""):
+    """A labelled row; field is a widget or a layout. With help, a ? sits after the label."""
     lbl = QLabel(text)
     lbl.setMinimumWidth(_LABEL_W)
+    if help:
+        cell = QWidget()
+        h = QHBoxLayout(cell)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        h.addWidget(lbl)
+        h.addWidget(_HelpButton(help))
+        h.addStretch(1)
+        lbl = cell
     form.addRow(lbl, field)
+    return lbl
 
 
-def _section(form, text):
-    """Heading with a thin rule under it; the object names are styled in theme.py."""
+def _new_form(w: QWidget, margins=(14, 12, 14, 14)) -> QFormLayout:
+    form = QFormLayout(w)
+    form.setContentsMargins(*margins)
+    form.setHorizontalSpacing(10)
+    form.setVerticalSpacing(8)
+    form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+    form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+    form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    return form
+
+
+def _section(form, text, help="", fold=None):
+    """Heading with a thin rule under it; the object names are styled in theme.py. With fold (True: closed at first,
+    False: open) the section can be folded: what is added to the form this returns lands in its body, so the caller
+    carries on with `form = _section(...)`. Otherwise the form is returned as it was."""
+    form = getattr(form, "_page_form", form)
     box = QWidget()
     v = QVBoxLayout(box)
     v.setContentsMargins(0, 0 if form.rowCount() == 0 else 10, 0, 0)
     v.setSpacing(4)
-    hdr = QLabel(text)
-    hdr.setObjectName("settings_section")
-    f = hdr.font()
-    f.setBold(True)
-    hdr.setFont(f)
+    head = _SectionHead(text, help, fold)
     rule = QFrame()
     rule.setObjectName("settings_rule")
     rule.setFrameShape(QFrame.HLine)
-    v.addWidget(hdr)
+    v.addWidget(head)
     v.addWidget(rule)
     form.addRow(box)
+    if fold is None:
+        return form
+    body = QWidget()
+    sub = _new_form(body, (0, 0, 0, 0))
+    sub._page_form = form
+    body.setVisible(not fold)
+    head.toggled.connect(body.setVisible)
+    form.addRow(body)
+    return sub
 
 
 def _hint(text):
@@ -160,10 +320,18 @@ def _hint(text):
 
 
 def _check(chk, hint=""):
-    """A checkbox spanning the row, with an optional hint (text or label) tucked under it."""
+    """A checkbox spanning the row. A short hint (or a label that changes, such as a status) sits tucked under it,
+    a long one is behind a ? at the end of the row."""
     if not hint:
         return chk
     box = QWidget()
+    if isinstance(hint, str) and len(hint) > _INLINE_MAX:
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+        h.addWidget(chk, 1)
+        h.addWidget(_HelpButton(hint))
+        return box
     v = QVBoxLayout(box)
     v.setContentsMargins(0, 0, 0, 0)
     v.setSpacing(2)
@@ -329,15 +497,8 @@ class SettingsWidget(QWidget):
 
     def _page(self):
         """An empty tab page: a widget plus its form layout."""
-        w    = QWidget()
-        form = QFormLayout(w)
-        form.setContentsMargins(14, 12, 14, 14)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(8)
-        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        return w, form
+        w = QWidget()
+        return w, _new_form(w)
 
     def _tab_playback(self) -> QWidget:
         w, form = self._page()
@@ -358,27 +519,25 @@ class SettingsWidget(QWidget):
         self._xfade_sl.sliderReleased.connect(self._apply_crossfade)
         _field(form, "Crossfade", _row(self._xfade_sl, self._xfade_lbl))
 
-        self._video_dsp_chk = QCheckBox("Process the sound of videos with the equalizer, Enhance and DSP")
+        self._video_dsp_chk = QCheckBox("Use the EQ and DSP on video sound")
         self._video_dsp_chk.setChecked(c.get("video_dsp", True))
-        self._video_dsp_chk.setToolTip(
-            "Plays the sound of video files through the same EQ, DSP chain and Enhance as music.\n"
-            "The sound runs about 50 ms behind the picture, and the delay below moves it. If it cannot be\n"
-            "kept in step, the video goes back to its own sound. Applies at once, also to a playing video."
-        )
         self._video_dsp_chk.toggled.connect(self._apply_video_dsp)
-        form.addRow(_check(self._video_dsp_chk, "Applies at once, also to a video that is playing."))
+        form.addRow(_check(self._video_dsp_chk,
+            "Plays the sound of video files through the same equalizer, Enhance and DSP chain as music. "
+            "The sound runs about 50 ms behind the picture, and the delay below moves it. If it cannot be "
+            "kept in step, the video goes back to its own sound. Applies at once, also to a video that is playing."))
 
         delay = max(-200, min(200, int(c.get("video_delay_ms", 0))))
         self._vdelay_sl, self._vdelay_lbl = _hslider(
-            -200, 200, delay, tip="Moves the sound of videos against the picture. Positive plays the sound later, "
-            "negative holds the picture back instead, since the sound cannot come before it.\n"
-            "Applies while the video plays. The sound card has a delay of its own that is not counted.",
-            fmt=lambda v: "0 ms" if v == 0 else f"{v:+d} ms")
+            -200, 200, delay, fmt=lambda v: "0 ms" if v == 0 else f"{v:+d} ms")
         self._vdelay_sl.setSingleStep(1)
         self._vdelay_sl.setPageStep(10)
         self._vdelay_sl.valueChanged.connect(self._apply_video_delay)
         self._vdelay_sl.sliderReleased.connect(self.save)
-        _field(form, "Video sound delay", _row(self._vdelay_sl, self._vdelay_lbl))
+        _field(form, "Video sound delay", _row(self._vdelay_sl, self._vdelay_lbl),
+               help="Moves the sound of videos against the picture. Positive plays the sound later, negative holds "
+                    "the picture back instead, since the sound cannot come before it. Applies while the video plays. "
+                    "The sound card has a delay of its own that is not counted.")
         self._vlag_lbl = _LiveLabel()
         self._vlag_lbl.setObjectName("settings_hint")
         self._vlag_lbl.setWordWrap(True)
@@ -441,9 +600,9 @@ class SettingsWidget(QWidget):
         return self._scroll_wrap(w)
 
     def _sec_waterfall(self, form):
-        _section(form, "Waterfall")
-        form.addRow(_hint("The spectrogram panel has its own settings: FFT, window, frequency axis, "
-                          "level range, smoothing, colour map and direction. Right click it for the same."))
+        _section(form, "Waterfall",
+                 help="The spectrogram panel has its own settings: FFT, window, frequency axis, level range, "
+                      "smoothing, colour map and direction. Right click it for the same.")
         btn = QPushButton("Waterfall settings\u2026")
         btn.clicked.connect(self.waterfall_requested.emit)
         form.addRow(btn)
@@ -506,7 +665,7 @@ class SettingsWidget(QWidget):
 
     def _sec_oscilloscope(self, form):
         c = self._cfg
-        _section(form, "Oscilloscope")
+        form = _section(form, "Oscilloscope", fold=True)
 
         self._osc_win_sl, self._osc_win_lbl = _hslider(5, 500, c["osc_window_ms"], " ms",
             tip="How much time the scope shows at once. Smaller = more zoomed-in on the waveform.")
@@ -578,22 +737,28 @@ class SettingsWidget(QWidget):
         self._style_combo = QComboBox()
         self._style_combo.addItems(["Default", "Frutiger Aero"])
         self._style_combo.setCurrentIndex(1 if self._cfg.get("theme_style") == "aero" else 0)
-        self._style_combo.setToolTip("The look of AudioCrate's own theme (used when \u201cUse system style\u201d "
-                                     "is off): glass title bars and buttons with a bright rim, in sky blue "
-                                     "or the album art colours.")
         self._style_combo.currentIndexChanged.connect(lambda _: self._apply_theme_style())
-        _field(form, "Style", self._style_combo)
+        _field(form, "Style", self._style_combo,
+               help="The look of AudioCrate's own theme (used when \u201cUse system style and colours\u201d is off): "
+                    "glass title bars and buttons with a bright rim, in sky blue or the album art colours.")
 
         self._titlebar_chk = QCheckBox("Use AudioCrate title bars")
         self._titlebar_chk.setChecked(self._cfg.get("custom_titlebar", True))
         self._titlebar_chk.toggled.connect(self._apply_custom_titlebar)
         form.addRow(_check(self._titlebar_chk, "Restart to apply."))
 
-        _section(form, "Colours")
-        form.addRow(_hint("Used by AudioCrate's own theme (when \u201cUse system style\u201d is off)."))
-        _field(form, "Accent",     self._color_row("accent_color", "Accent colour"))
-        _field(form, "Background", self._color_row("bg_color", "Background colour", auto=True))
-        _field(form, "Text",       self._color_row("text_color", "Text colour", auto=True))
+        form = _section(form, "Colours", fold=self._system_theme_chk.isChecked(),
+                        help="Accent, background and text are used by AudioCrate's own theme, when "
+                             "\u201cUse system style and colours\u201d is off.")
+        own = []                                    # what only AudioCrate's own theme uses
+        for label, key, title, auto in (("Accent", "accent_color", "Accent colour", False),
+                                        ("Background", "bg_color", "Background colour", True),
+                                        ("Text", "text_color", "Text colour", True)):
+            row = self._color_row(key, title, auto=auto)
+            own.append(_field(form, label, row))
+            own += [row.itemAt(i).widget() for i in range(row.count())]
+        self._own_theme_widgets = own
+        self._apply_own_theme_enabled(not self._system_theme_chk.isChecked())
 
         self._shade_sl, self._shade_lbl = _hslider(0, 100, self._cfg.get("frame_shade", 0), "%")
         self._shade_sl.setToolTip("Shades panel title bars with a gradient for depth.")
@@ -607,7 +772,7 @@ class SettingsWidget(QWidget):
         self._borders.toggled.connect(lambda _: self._apply_theme_style())
         form.addRow(_check(self._borders, "Off gives a flatter look."))
 
-        _section(form, "Text")
+        form = _section(form, "Text")
         self._font_btn = QPushButton(self._font_name(self._cfg.get("text_font", "")))
         self._font_btn.setToolTip("Opens the system font dialog")
         self._font_btn.clicked.connect(self._pick_font)
@@ -693,7 +858,12 @@ class SettingsWidget(QWidget):
             "style":       self._cfg["theme_style"],
         })
 
+    def _apply_own_theme_enabled(self, on: bool):
+        for w in getattr(self, "_own_theme_widgets", ()):
+            w.setEnabled(on)
+
     def _apply_system_theme(self, on: bool):
+        self._apply_own_theme_enabled(not on)
         self._cfg["system_theme"] = on
         self.save()
         self.system_theme_changed.emit(on)
@@ -777,7 +947,9 @@ class SettingsWidget(QWidget):
         self._viz_auto_suspend_chk = QCheckBox("Auto-suspend visualizers")
         self._viz_auto_suspend_chk.setChecked(self._cfg.get("viz_auto_suspend", True))
         self._viz_auto_suspend_chk.toggled.connect(self._apply_viz_auto_suspend)
-        form.addRow(self._viz_auto_suspend_chk)
+        form.addRow(_check(self._viz_auto_suspend_chk,
+            "Stops drawing the visualizers while AudioCrate is minimized or not the active window, which saves "
+            "processor time."))
 
         self._anim_chk = QCheckBox("Animations")
         self._anim_chk.setChecked(self._cfg.get("animations", True))
@@ -786,9 +958,9 @@ class SettingsWidget(QWidget):
         anim.set_enabled(self._anim_chk.isChecked())
 
     def _sec_artists(self, form):
-        _section(form, "Artist names")
-        form.addRow(_hint("A tag with several artists is split into separate names. The library, search and "
-                          "statistics treat each name on its own."))
+        form = _section(form, "Artist names", fold=True,
+                        help="A tag with several artists is split into separate names. The library, search and "
+                             "statistics treat each name on its own.")
         self._split_commas = QCheckBox("Split at commas")
         self._split_commas.setChecked(self._cfg["artist_split_commas"])
         self._split_amp = QCheckBox("Split at &&")
@@ -800,7 +972,14 @@ class SettingsWidget(QWidget):
         form.addRow(_check(self._split_slash, "A tag is always split at ; and at feat., ft. and featuring. A tag that "
                            "holds several values is never split any further. Older ID3v2.3 tags list several "
                            "artists with a slash. It is off by default because some names, like AC/DC, have one."))
-        form.addRow(_hint("Names that stay whole, one per line. The album artist of a file stays whole too."))
+        keep_head = QWidget()
+        kh = QHBoxLayout(keep_head)
+        kh.setContentsMargins(0, 0, 0, 0)
+        kh.setSpacing(4)
+        kh.addWidget(QLabel("Names that stay whole"))
+        kh.addWidget(_HelpButton("One name per line. The album artist of a file stays whole too."))
+        kh.addStretch(1)
+        form.addRow(keep_head)
         self._split_keep = QPlainTextEdit(self._cfg["artist_exceptions"])
         self._split_keep.setFixedHeight(96)
         form.addRow(self._split_keep)
@@ -842,13 +1021,12 @@ class SettingsWidget(QWidget):
 
     def _sec_tour(self, form):
         _section(form, "Tour")
-        form.addRow(_hint("A short picture tour of where things are."))
         btn = QPushButton("Show the tour")
         btn.clicked.connect(self.tour_requested)
         form.addRow(self._button_row(btn))
 
     def _sec_logs(self, form):
-        _section(form, "Logs")
+        form = _section(form, "Logs", fold=True)
         self._debug_logs_chk = QCheckBox("Write detailed logs")
         self._debug_logs_chk.setChecked(self._cfg.get("debug_logs", False))
         self._debug_logs_chk.toggled.connect(self._apply_debug_logs)
@@ -863,7 +1041,7 @@ class SettingsWidget(QWidget):
 
     def _sec_lighting(self, form):
         c = self._cfg
-        _section(form, "Lighting")
+        form = _section(form, "Lighting", fold=True)
 
         self._rgb_enabled = QCheckBox("Enable lighting")
         self._rgb_enabled.setChecked(c["rgb_enabled"])
@@ -924,23 +1102,22 @@ class SettingsWidget(QWidget):
         self._rgb_status.setVisible(bool(text))
 
     def _sec_backup(self, form):
-        _section(form, "Panel layout")
-        form.addRow(_hint("Save or restore the full panel layout (positions, sizes, floating state, visibility)."))
+        form = _section(form, "Backup and reset", fold=True)
         exp_btn = QPushButton("Export\u2026")
         exp_btn.clicked.connect(self._on_export_layout)
         imp_btn = QPushButton("Import\u2026")
         imp_btn.clicked.connect(self._on_import_layout)
-        form.addRow(self._button_row(exp_btn, imp_btn))
+        _field(form, "Panel layout", self._button_row(exp_btn, imp_btn),
+               help="Save or restore the full panel layout: positions, sizes, floating state and visibility.")
 
-        _section(form, "All settings")
-        form.addRow(_hint("Settings and layout together, in one .json file."))
         cfg_exp_btn = QPushButton("Export\u2026")
         cfg_exp_btn.setToolTip("Saves all settings + layout into a single .json file")
         cfg_exp_btn.clicked.connect(self._on_export_config)
         cfg_imp_btn = QPushButton("Import\u2026")
         cfg_imp_btn.setToolTip("Restores all settings + layout from a previously exported file")
         cfg_imp_btn.clicked.connect(self._on_import_config)
-        form.addRow(self._button_row(cfg_exp_btn, cfg_imp_btn))
+        _field(form, "All settings", self._button_row(cfg_exp_btn, cfg_imp_btn),
+               help="Settings and layout together, in one .json file.")
 
         reset_btn = QPushButton("Reset all settings")
         reset_btn.clicked.connect(self._reset_defaults)
@@ -962,59 +1139,57 @@ class SettingsWidget(QWidget):
 
     def _sec_discord(self, form):
         c = self._cfg
-        _section(form, "Discord Rich Presence")
+        form = _section(form, "Discord Rich Presence", fold=not c.get("discord_rpc_enabled", False))
 
         self._discord_enable = QCheckBox("Show my music on Discord")
         self._discord_enable.setChecked(c.get("discord_rpc_enabled", False))
-        self._discord_enable.setToolTip("Requires the Discord desktop app running. "
-                                        "Album art needs the art URL below.")
         self._discord_enable.toggled.connect(lambda _: self._apply_discord())
-        form.addRow(self._discord_enable)
+        form.addRow(_check(self._discord_enable,
+                           "Needs the Discord desktop app running. Album art needs the art URL below."))
 
         self._discord_client_id = QLineEdit(c.get("discord_client_id", ""))
         self._discord_client_id.setPlaceholderText("Application client ID")
         self._discord_client_id.editingFinished.connect(self._apply_discord)
-        _field(form, "App ID", self._discord_client_id)
+        _field(form, "App ID", self._discord_client_id,
+               help="The Application ID of an application you made at discord.com/developers. Discord needs it "
+                    "to show your music.")
 
         self._discord_art_base = QLineEdit(c.get("discord_art_base_url", ""))
         self._discord_art_base.setPlaceholderText("Public base URL")
-        self._discord_art_base.setToolTip("Public base URL that serves the album art.")
         self._discord_art_base.editingFinished.connect(self._apply_discord)
-        _field(form, "Art URL", self._discord_art_base)
+        _field(form, "Art URL", self._discord_art_base, help="Public base URL that serves the album art.")
 
         self._discord_art_upload = QLineEdit(c.get("discord_art_upload_cmd", ""))
         self._discord_art_upload.setPlaceholderText("Command, optional")
-        self._discord_art_upload.setToolTip(
-            "If the Art URL is hosted elsewhere, this shell command uploads each art "
-            "file there. {file} is replaced with the local path (e.g. an scp/rsync command).")
         self._discord_art_upload.editingFinished.connect(self._apply_discord)
-        _field(form, "Art upload", self._discord_art_upload)
+        _field(form, "Art upload", self._discord_art_upload,
+               help="If the Art URL is hosted elsewhere, this shell command uploads each art file there. {file} is "
+                    "replaced with the local path (for example an scp or rsync command).")
 
     def _sec_scrobbling(self, form):
-        _section(form, "Scrobbling")
-        form.addRow(_hint(
-            "Scrobbles once a track has played 50% (or 4 minutes, whichever is "
-            "sooner). Each service needs its own free API key from your account "
-            "there: last.fm/api/account/create or libre.fm/api/account/create."
-        ))
+        _section(form, "Scrobbling",
+                 help="Scrobbles once a track has played 50% (or 4 minutes, whichever is sooner). Each service needs "
+                      "its own free API key from your account there: last.fm/api/account/create or "
+                      "libre.fm/api/account/create.")
 
         self._scrobble_widgets = {}
         for service, label in (("lastfm", "Last.fm"), ("librefm", "Libre.fm")):
-            _section(form, label)
+            on = self._cfg.get(f"{service}_enabled", False)
+            sub = _section(form, label, fold=not on)
 
             enable = QCheckBox(f"Scrobble to {label}")
-            enable.setChecked(self._cfg.get(f"{service}_enabled", False))
+            enable.setChecked(on)
             status = _hint("Not connected")
-            form.addRow(_check(enable, status))
+            sub.addRow(_check(enable, status))
 
             key = QLineEdit(self._cfg.get(f"{service}_api_key", ""))
             key.setPlaceholderText("API key")
-            _field(form, "API key", key)
+            _field(sub, "API key", key)
 
             secret = QLineEdit(self._cfg.get(f"{service}_api_secret", ""))
             secret.setPlaceholderText("API secret")
             secret.setEchoMode(QLineEdit.Password)
-            _field(form, "API secret", secret)
+            _field(sub, "API secret", secret)
 
             connect_btn = QPushButton("Connect\u2026")
             disconnect_btn = QPushButton("Disconnect")
@@ -1024,7 +1199,7 @@ class SettingsWidget(QWidget):
             btn_row.addWidget(connect_btn)
             btn_row.addWidget(disconnect_btn)
             btn_row.addStretch(1)
-            _field(form, "Account", btn_row)
+            _field(sub, "Account", btn_row)
 
             self._scrobble_widgets[service] = {
                 "enable": enable, "key": key, "secret": secret,
@@ -1242,7 +1417,7 @@ class SettingsWidget(QWidget):
 
     def _vlag_text(self, ms):
         if ms is None:
-            self._vlag_lbl.setText("While a video plays, this shows how far its sound is from the picture.")
+            self._vlag_lbl.setText("Shows the offset while a video plays.")
         elif ms >= 0:
             self._vlag_lbl.setText(f"Now about {round(ms)} ms behind the picture.")
         else:
