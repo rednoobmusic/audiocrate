@@ -13,7 +13,7 @@ import math
 import numpy as np
 from scipy.signal import lfilter
 
-from dsp_base import Context, DspModule, Param, register
+from dsp_base import DspModule, Param, register
 
 _DB = math.log(10.0) / 20.0     # natural log units per dB of amplitude
 

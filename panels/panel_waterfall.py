@@ -1295,7 +1295,6 @@ class WaterfallWidget(QWidget):
             s += step
 
     def _paint_legend(self, p: QPainter, g):
-        c = self._cfg
         bar = g.bar
         grad = QLinearGradient(0, bar.top(), 0, bar.bottom())
         for i in range(0, 256, 17):

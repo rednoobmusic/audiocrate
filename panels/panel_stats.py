@@ -152,7 +152,7 @@ class _HistoryChart(QWidget):
             return
         self._layout()
         fm = self.fontMetrics()
-        w, h = self.width(), self.height()
+        w = self.width()
         plot = self._plot
         colors = [QColor(c) for c in (
             _SERIES_DARK if self.palette().base().color().lightness() < 128 else _SERIES_LIGHT)]

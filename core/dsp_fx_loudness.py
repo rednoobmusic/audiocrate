@@ -23,7 +23,7 @@ from collections import deque
 import numpy as np
 from scipy.signal import sosfilt
 
-from dsp_base import Context, DspModule, Param, register
+from dsp_base import DspModule, Param, register
 
 
 def _in(x):

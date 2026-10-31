@@ -3,7 +3,6 @@ import contextlib
 import json
 import base64
 import sys
-import time
 from pathlib import Path
 import plat_fs
 import plat_paths
@@ -1243,7 +1242,6 @@ class MainWindow(QMainWindow):
           and not the colours of whichever theme was chosen last
         - app theme: full app QSS (accent / background / text / shade / style)
         """
-        app = QApplication.instance()
         palette = self._current_art_palette()
         self._last_art_palette = palette   # keep the no-op guard in sync
         self._sync_titlebar()

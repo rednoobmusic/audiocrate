@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QButtonGroup, QGridLayout, QLabel, QSlider, QCheckBox,
     QScrollArea, QFrame,
     QSizePolicy, QPushButton, QFileDialog, QComboBox,
-    QMessageBox, QFontComboBox, QLineEdit, QColorDialog, QPlainTextEdit, QApplication, QGraphicsDropShadowEffect,
+    QMessageBox, QLineEdit, QColorDialog, QPlainTextEdit, QApplication, QGraphicsDropShadowEffect,
 )
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPalette, QPen, QPolygonF
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer, QUrl, Signal

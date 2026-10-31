@@ -19,7 +19,7 @@ thread and never blocks, process() runs on the audio thread and picks the new se
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 

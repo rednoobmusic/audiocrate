@@ -377,7 +377,7 @@ def decorate_dialog(win: QWidget) -> None:
     if win.testAttribute(Qt.WA_Resized):
         win.resize(win.width(), win.height() + HEIGHT)
     bar = TitleBar(win, menu=False, kinds=("close",))
-    chrome = _DialogChrome(win, bar)
+    _DialogChrome(win, bar)             # a child of the dialog, so it lives as long as it
     bar.show()
     fixed = win.minimumSize() == win.maximumSize() and not win.minimumSize().isNull()
     if not fixed:

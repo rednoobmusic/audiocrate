@@ -1310,8 +1310,8 @@ class PlaylistPanel(QWidget):
         paste_act.setEnabled(bool(self._clipboard))
         if path:
             m.addSeparator()
-            up = m.addAction("\U000f0795  Move to top",    lambda: lst.move_selected("move_top"))
-            dn = m.addAction("\U000f0792  Move to bottom", lambda: lst.move_selected("move_bottom"))
+            m.addAction("\U000f0795  Move to top",    lambda: lst.move_selected("move_top"))
+            m.addAction("\U000f0792  Move to bottom", lambda: lst.move_selected("move_bottom"))
             if many:
                 sortsel = m.addMenu("\U000f05bd  Sort selection")
                 for name, (label, _keys) in PRESETS.items():

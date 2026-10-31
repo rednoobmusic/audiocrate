@@ -759,7 +759,6 @@ class ConvertDialog(QDialog):
         self._tags.setToolTip('' if not fmt or fmt.tags else '%s files cannot hold tags.' % fmt.label)
 
     def _on_format(self, *_):
-        fmt = self._fmt()
         self._fill_qualities()
         self._show_format_state()
         self._changed()
