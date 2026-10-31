@@ -149,6 +149,39 @@ class _Card(QAbstractButton):
             pt.drawRoundedRect(QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75), 9, 9)
 
 
+class ThemeNow(_Card):
+    """The theme in use as one card, which opens the rest when it is clicked."""
+
+    def __init__(self):
+        super().__init__(tp.PRESETS[0])
+        self.setChecked(True)
+        self.setToolTip("The theme in use. Click to choose another.")
+
+    def nextCheckState(self):
+        pass                                        # it always shows as the one in use
+
+    def show_for(self, cfg: dict):
+        key = tp.current(cfg)
+        p = tp.preset(key) or tp.Preset("custom", "Custom", cfg.get("accent_color") or "#8040c8", cfg.get("bg_color") or "",
+                                        cfg.get("text_color") or "", style=cfg.get("theme_style") or "default")
+        self._p = p
+        self.setAccessibleName(p.name)
+        self.update()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        pt = QPainter(self)
+        pt.setRenderHint(QPainter.Antialiasing)
+        _bg, fg, _acc = self._look()
+        if self._p.kind == "system":
+            fg = QColor("#ffffff")                  # the arrow sits on the dark half of this card
+        fg.setAlpha(190)
+        pt.setPen(Qt.NoPen)
+        pt.setBrush(fg)
+        x, y = self.width() - 32, self.height() - 22                  # a small arrow down: there is more below
+        pt.drawPolygon([QPointF(x, y), QPointF(x + 10, y), QPointF(x + 5, y + 6)])
+
+
 class ThemePicker(QWidget):
     """Cards for every preset in core/theme_presets.py. A click says which one through `chosen`; the settings that
     follow the click call `select` with the preset they add up to ("custom" leaves every card unmarked)."""

@@ -20,7 +20,7 @@ from player import device_key
 import anim
 import plat_paths
 import theme_presets
-from theme_picker import ThemePicker
+from theme_picker import ThemeNow, ThemePicker
 
 _CFG_FILE = plat_paths.config_dir() / "settings.json"
 
@@ -378,6 +378,7 @@ def _section(form, text, help="", fold=None, minor=False):
     body.setVisible(not fold)
     head.toggled.connect(body.setVisible)
     form.addRow(body)
+    sub._head = head
     return sub
 
 
@@ -805,9 +806,13 @@ class SettingsWidget(QWidget):
         self._swatch_updaters = {}   # key: fn that repaints a colour swatch
 
         _section(form, "Theme")
+        self._theme_now = ThemeNow()
+        form.addRow(self._theme_now)
+        themes = _section(form, "All themes", minor=True, fold=True)
         self._theme_picker = ThemePicker()
         self._theme_picker.chosen.connect(self._choose_theme)
-        form.addRow(self._theme_picker)
+        themes.addRow(self._theme_picker)
+        self._theme_now.clicked.connect(themes._head._flip)         # the card opens and closes the list
 
         self._art_color_chk = QCheckBox("Colours follow the album art")
         self._art_color_chk.setChecked(self._cfg["art_color_theme"])
@@ -934,6 +939,7 @@ class SettingsWidget(QWidget):
         """The picker, the greyed rows and the sliders, from the settings: after a preset was chosen, a config was
         imported or the settings were reset."""
         self._theme_picker.select(theme_presets.current(self._cfg))
+        self._theme_now.show_for(self._cfg)
         self._apply_own_theme_enabled(not self._cfg["system_theme"])
         for update in self._swatch_updaters.values():
             update()
@@ -959,6 +965,7 @@ class SettingsWidget(QWidget):
         self._cfg["corner_radius"] = self._radius_sl.value()
         self.save()
         self._theme_picker.select(theme_presets.current(self._cfg))
+        self._theme_now.show_for(self._cfg)
         self.theme_style_changed.emit({
             "accent":      self._cfg.get("accent_color", "#8040c8"),
             "bg":          self._cfg.get("bg_color", ""),
