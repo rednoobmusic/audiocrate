@@ -1072,17 +1072,32 @@ class MainWindow(QMainWindow):
                 c.setStyleSheet(self._panel_qss)
         super().childEvent(e)
 
-    def _make_qss(self, palette=None) -> str:
+    def _sync_titlebar(self):
+        """What the title bars paint of the theme. The style (glass, scan lines, metal...) belongs to AudioCrate's own
+        sheet, so under the system look, which has none, the bars paint the plain one."""
         s = self._settings
         try:
             import titlebar
+            own = not self._system_theme or self._current_art_palette() is not None
+            style = s.get("theme_style", "default") if own else "default"
             titlebar.show_line = bool(s.get("panel_borders", True))
-            titlebar.aero = s.get("theme_style", "default") == "aero"
-            titlebar.style = s.get("theme_style", "default")
+            titlebar.aero = style == "aero"
+            titlebar.style = style
             titlebar.accent = QColor(s.get("accent_color", "#8040c8"))
             titlebar.shade = max(0, min(100, int(s.get("frame_shade", 0))))
         except ImportError:
-            pass
+            return
+        if getattr(self, "_titlebar", None) is not None:
+            self._titlebar.update()
+
+    def _using_system_look(self) -> bool:
+        """The OS look with no sheet of ours on it: the system theme, unless the album art colours are on and there is
+        a palette for the song (the art theme is our own sheet, coloured from the cover)."""
+        return self._system_theme and self._current_art_palette() is None
+
+    def _make_qss(self, palette=None) -> str:
+        s = self._settings
+        self._sync_titlebar()
         return make_qss(
             palette,
             text_font=s.get("text_font", "") or None,
@@ -1168,7 +1183,7 @@ class MainWindow(QMainWindow):
         """Visualizers/waveform follow the OS highlight only on a *pure* system
         theme; with the app's own (purple) theme or art-derived colours, the
         no-art fallback is the app accent, so it matches what's on screen."""
-        use_sys = self._system_theme and not self._art_color_on
+        use_sys = self._using_system_look()
         self._osc.set_system_accent(use_sys)
         self._waterfall.set_system_accent(use_sys)
         self._online.set_system_accent(use_sys)
@@ -1219,15 +1234,17 @@ class MainWindow(QMainWindow):
         """Single source of truth for the active stylesheet.
 
         - album-art theme: full app QSS built from the art palette
-        - system theme: keep the OS theme (no app QSS)
-        - app (dark) theme: full app QSS (accent / background / text / shade)
+        - system theme: keep the OS theme (no app QSS), also with the art colours on while a song has no cover,
+          and not the colours of whichever theme was chosen last
+        - app theme: full app QSS (accent / background / text / shade / style)
         """
         app = QApplication.instance()
         palette = self._current_art_palette()
         self._last_art_palette = palette   # keep the no-op guard in sync
+        self._sync_titlebar()
         if palette is not None:
             self._set_app_qss(self._make_qss(palette))
-        elif self._system_theme and not self._art_color_on:
+        elif self._system_theme:
             self._set_app_qss("")
         else:
             self._set_app_qss(self._make_qss())
@@ -1240,7 +1257,7 @@ class MainWindow(QMainWindow):
         unchecked look is preserved) using the OS highlight colour. Covers Controls,
         Library mode buttons, EQ bypass, Milkdrop toggles, and any later toggle."""
         from PySide6.QtWidgets import QPushButton
-        use_system = self._system_theme and not self._art_color_on
+        use_system = self._using_system_look()
         if use_system:
             pal = self.palette()
             bg = pal.highlight().color().name()
@@ -1409,7 +1426,7 @@ class MainWindow(QMainWindow):
         # app sheet to rebuild, and making one here put the purple theme back after _apply_settings had cleared it.
         _saved_tf = self._settings.get("text_font", "") or None
         _saved_sz = self._settings.get("ui_size", 13)
-        if self._system_theme and not self._art_color_on:
+        if self._system_theme:
             if _saved_tf:
                 self._on_font_changed(_saved_tf)
             if _saved_sz != 13:
@@ -1585,11 +1602,12 @@ class MainWindow(QMainWindow):
             if self._system_theme:
                 QApplication.instance().setStyle("")
                 self._set_app_qss("")
+                self._sync_titlebar()
             else:
                 self._set_app_qss(self._make_qss())
             self._restyle_toggle_buttons()
         else:
-            self._reapply_qss()     # the art theme is the app's own sheet, with or without a palette yet
+            self._reapply_qss()     # the art theme is our own sheet, from the cover once the song has one
             if self._player.current:
                 import threading
                 threading.Thread(
