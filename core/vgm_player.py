@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 import time
+from ctypes.util import find_library
 from pathlib import Path
 
 from PySide6.QtCore import QMetaObject, QObject, Qt, Signal, QTimer
@@ -38,7 +39,8 @@ class _NoGme:
 
 
 # libgme binding
-_lib = plat_native.load("libgme.so", "libgme.dll")
+# Debian, Ubuntu and Fedora ship only libgme.so.0 unless the development package is installed
+_lib = plat_native.load(["libgme.so", "libgme.so.0", find_library("gme") or "libgme.so.0"], "libgme.dll")
 if _lib is None:
     from applog import log
     log.warning("libgme was not found, so chiptune files (VGM, NSF, SPC and others) cannot be played")
