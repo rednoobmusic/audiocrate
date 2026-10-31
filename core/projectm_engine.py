@@ -12,6 +12,7 @@ import ctypes
 import os
 import sys
 from ctypes.util import find_library
+from pathlib import Path
 
 import numpy as np
 
@@ -25,11 +26,17 @@ _core = None
 _pl   = None
 
 
-def _open(linux_stem: str, windows_file: str):
+_BUNDLED = Path(__file__).resolve().parent.parent / "linuxlibs"    # the projectM 4 that comes with the Linux release
+
+
+def _open(linux_stem: str, windows_file: str, bundled: bool = False):
     """One of the two libraries, or None. The playlist library imports the core by name, so on Windows the folder they
-    lie in is added to where imports are looked for."""
+    lie in is added to where imports are looked for. On Linux the system's copy is tried first and the one that comes
+    with the release second, for a system that only has projectM 3 (Debian, Ubuntu and Fedora do)."""
     if sys.platform == "win32":
         return plat_native.load(None, windows_file, with_folder=True)
+    if bundled:
+        return plat_native.load(str(_BUNDLED / f"lib{linux_stem}.so.4"), windows_file)
     return plat_native.load(find_library(linux_stem) or f"lib{linux_stem}.so", windows_file)
 
 
@@ -37,11 +44,17 @@ def _load():
     global _core, _pl
     if _core is not None:
         return True
-    _core = _open("projectM-4", "projectM-4.dll")
-    _pl   = _open("projectM-4-playlist", "projectM-4-playlist.dll") if _core is not None else None
-    if _core is None or _pl is None:
-        _core = _pl = None
+    for bundled in (False, True):
+        core = _open("projectM-4", "projectM-4.dll", bundled)
+        pl = _open("projectM-4-playlist", "projectM-4-playlist.dll", bundled) if core is not None else None
+        if core is not None and pl is not None:
+            break
+        core = pl = None
+        if sys.platform == "win32":
+            break
+    if core is None:
         return False
+    _core, _pl = core, pl
 
     h = ctypes.c_void_p
     # core (libprojectM-4)
@@ -89,6 +102,16 @@ def _load():
 
 def available() -> bool:
     return _load()
+
+
+def missing_reason() -> str:
+    """Why projectM cannot be used here, in a sentence, for the panel that needs it."""
+    if sys.platform == "win32":
+        return "projectM is not installed (projectM-4.dll and projectM-4-playlist.dll belong in the libs folder of the program)"
+    old = find_library("projectM")
+    if old and not find_library("projectM-4"):
+        return "this system has projectM 3 (%s) and AudioCrate needs projectM 4 (libprojectM-4)" % old
+    return "projectM 4 is not installed (AudioCrate needs libprojectM-4 and libprojectM-4-playlist)"
 
 
 def version() -> str:

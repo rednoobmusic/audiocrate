@@ -47,13 +47,14 @@ def _surface_format() -> QSurfaceFormat:
 
 
 def _guarded() -> bool:
-    """Windows checks that OpenGL 3.3 and projectM are there before the view is shown, and steps aside when they are not:
-    a computer there may have nothing but the basic display driver. Linux leaves a view that cannot draw as it always did."""
+    """Windows checks that OpenGL 3.3 is there before the view is shown, and steps aside when it is not: a computer
+    there may have nothing but the basic display driver. Linux leaves a view that cannot draw as it always did.
+    The check for projectM itself is made everywhere."""
     return sys.platform == "win32"
 
 
 class _GLViz(QOpenGLWindow):
-    failed = Signal(str)            # the engine could not be made (Windows only, see _guarded)
+    failed = Signal(str)            # the engine could not be made
 
     def __init__(self, pcm_callback):
         super().__init__()
@@ -100,8 +101,7 @@ class _GLViz(QOpenGLWindow):
             self._timer.start()
         except Exception as e:
             log.warning("projectM init failed: %s", e)
-            if _guarded():
-                self.failed.emit(str(e))
+            self.failed.emit(str(e))
 
     def _size_ready(self) -> bool:
         """projectM is told the window's size only once it has held still, never on every step of a
@@ -241,7 +241,7 @@ class _GLViz(QOpenGLWindow):
 class VisualizerPanel(QWidget):
     """Dockable Milkdrop panel: a projectM view + a butterchurn-style control bar."""
 
-    unavailable = Signal(str)       # Milkdrop cannot run here; the text says why (Windows only, see _guarded)
+    unavailable = Signal(str)       # Milkdrop cannot run here; the text says why
 
     def __init__(self, analyzer, player, parent=None):
         super().__init__(parent)
@@ -371,13 +371,14 @@ class VisualizerPanel(QWidget):
         self._sync_running()
 
     def _check_gl(self):
-        """Before the view is first shown: projectM's libraries and a core context of OpenGL 3.3. A window that is shown
-        without one is exposed all the same, and Qt then fails inside its own paint, so the view stays hidden until this
-        has answered."""
+        """Before the view is first shown: projectM's libraries and, on Windows, a core context of OpenGL 3.3. A window
+        that is shown without one is exposed all the same, and Qt then fails inside its own paint, so the view stays
+        hidden until this has answered."""
         self._probed = True
         if not pe.available():
-            self._give_up("Milkdrop is off: projectM is not installed (projectM-4.dll and projectM-4-playlist.dll belong "
-                          "in the libs folder of the program).")
+            self._give_up("Milkdrop is off: %s." % pe.missing_reason())
+            return
+        if not _guarded():
             return
         ok, detail = gl_probe.probe(_surface_format())
         if ok:
@@ -408,7 +409,7 @@ class VisualizerPanel(QWidget):
         self.unavailable.emit(text)
 
     def showEvent(self, e):
-        if _guarded() and not self._probed:
+        if not self._probed:
             self._check_gl()
         super().showEvent(e)
         self._sync_running()
