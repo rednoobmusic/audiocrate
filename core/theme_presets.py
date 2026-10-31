@@ -15,6 +15,8 @@ class Preset(NamedTuple):
     bg: str = ""
     text: str = ""
     kind: str = "own"       # "system" (the OS look), "aero" (the glass look) or "own" (AudioCrate's theme in these colours)
+    style: str = "default"  # the style it is drawn in (core/theme_styles.py), "default" for plain colours
+    radius: int = 4         # corner radius in px
 
 
 # Own themes in the first group keep what they always were: the purple default tints the whole window from its accent,
@@ -23,6 +25,11 @@ PRESETS = (
     Preset("system", "System", kind="system"),
     Preset("audiocrate", "AudioCrate", "#8040c8"),
     Preset("aero", "Frutiger Aero", kind="aero"),
+    # with a style of their own
+    Preset("terminal", "Terminal", "#39ff7a", "#030a05", "#2fe872", style="terminal", radius=0),
+    Preset("carbon", "Carbon", "#ff3b3b", "#141518", "#dfe3e8", style="carbon", radius=3),
+    Preset("chiptune", "Chiptune", "#ffa300", "#1d2b53", "#fff1e8", style="chiptune", radius=0),
+    Preset("parchment", "Parchment", "#9a3b1e", "#ecdfc2", "#3b2a1a", style="parchment", radius=2),
     # dark
     Preset("midnight", "Midnight", "#4f8cff", "#0b1220", "#d6e2ff"),
     Preset("black", "Black", "#ff4d6d", "#000000", "#e8e8e8"),
@@ -55,8 +62,8 @@ def settings_for(key: str) -> dict:
         return {"system_theme": True, "theme_style": "default"}
     if p.kind == "aero":
         return {"system_theme": False, "theme_style": "aero", "accent_color": "#8040c8", "bg_color": "", "text_color": ""}
-    return {"system_theme": False, "theme_style": "default", "accent_color": p.accent, "bg_color": p.bg,
-            "text_color": p.text}
+    return {"system_theme": False, "theme_style": p.style, "accent_color": p.accent, "bg_color": p.bg,
+            "text_color": p.text, "corner_radius": p.radius}
 
 
 def current(cfg: dict) -> str:
@@ -66,7 +73,8 @@ def current(cfg: dict) -> str:
     if cfg.get("theme_style") == "aero":
         return "aero"
     have = tuple((cfg.get(k) or "").lower() for k in ("accent_color", "bg_color", "text_color"))
+    style = cfg.get("theme_style") or "default"
     for p in PRESETS:
-        if p.kind == "own" and have == (p.accent.lower(), p.bg.lower(), p.text.lower()):
+        if p.kind == "own" and p.style == style and have == (p.accent.lower(), p.bg.lower(), p.text.lower()):
             return p.key
     return "custom"

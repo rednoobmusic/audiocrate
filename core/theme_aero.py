@@ -458,6 +458,7 @@ QLabel#settings_section {{ color: {accent_ll}; font-weight: bold; }}
 QLabel#settings_hint {{ color: {fg_dim}; placeholder-text-color: {fg_dim}; }}
 QFrame#settings_rule {{ background: {border_hi}; border: none; min-height: 1px; max-height: 1px; }}
 QPushButton#settings_nav {{ padding: 5px 4px; }}
+QFrame#settings_help {{ background: {bg2}; border: 1px solid {accent}; border-radius: 4px; }}
 QToolTip {{
     background: {glass_lo};
     color: {fg};

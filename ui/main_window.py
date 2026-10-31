@@ -1078,6 +1078,8 @@ class MainWindow(QMainWindow):
             import titlebar
             titlebar.show_line = bool(s.get("panel_borders", True))
             titlebar.aero = s.get("theme_style", "default") == "aero"
+            titlebar.style = s.get("theme_style", "default")
+            titlebar.accent = QColor(s.get("accent_color", "#8040c8"))
             titlebar.shade = max(0, min(100, int(s.get("frame_shade", 0))))
         except ImportError:
             pass

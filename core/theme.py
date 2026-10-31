@@ -141,6 +141,7 @@ QLabel#settings_section {{ color: {accent_l}; font-weight: bold; }}
 QLabel#settings_hint {{ color: {fg_dim}; placeholder-text-color: {fg_dim}; }}
 QFrame#settings_rule {{ background: {border}; border: none; min-height: 1px; max-height: 1px; }}
 QPushButton#settings_nav {{ padding: 5px 4px; }}
+QFrame#settings_help {{ background: {bg2}; border: 1px solid {border}; border-radius: {r}px; }}
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{
     width: 14px; height: 14px;
@@ -268,7 +269,8 @@ def make_qss(
     borders     False makes the lines between panels (title underlines, tab frames,
                 splitter handles, dock separators) transparent.
     palette     album-art palette (full dict); overrides accent/bg/text.
-    style       "aero" for the Frutiger Aero look (theme_aero.py); frame_shade and radius do not apply.
+    style       "aero" for the Frutiger Aero look (theme_aero.py); frame_shade and radius do not apply. Another name
+                from theme_styles.STYLES adds that style's textures and gradients to the plain rules.
     radius      corner radius in px of buttons, fields, menus and tooltips (4 is the look it always had).
 
     A bg that is light makes a light theme: the lists and fields are a touch whiter than the window, buttons and lines a
@@ -351,7 +353,11 @@ def make_qss(
     tf = f'"{text_font}", ' if text_font else ""
     sz = ui_size if ui_size is not None else _DEFAULT_UI_SIZE
     r = max(0, min(16, int(radius)))
-    return _QSS_TEMPLATE.format(**p, text_font=tf, ui_size=sz, r=r, r_s=max(0, r - 1), tick=_tick(p["bg"]))
+    qss = _QSS_TEMPLATE.format(**p, text_font=tf, ui_size=sz, r=r, r_s=max(0, r - 1), tick=_tick(p["bg"]))
+    if style != "default":
+        import theme_styles
+        qss += theme_styles.overlay(style, p, r)
+    return qss
 
 
 QSS = make_qss()

@@ -1,6 +1,8 @@
 """The theme picker in Settings: a grid of small cards, each painted in the colours of the look it chooses."""
 from __future__ import annotations
 
+import random
+
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractButton, QGridLayout, QSizePolicy, QWidget
@@ -36,13 +38,45 @@ class _Card(QAbstractButton):
             return QColor("#8cc8f4"), QColor("#0b3a66"), QColor("#ffffff")
         return QColor(p.bg or _DEFAULT_BG), QColor(p.text or _DEFAULT_TEXT), QColor(p.accent)
 
+    @staticmethod
+    def _flair(pt: QPainter, rect: QRectF, style: str, bg: QColor, accent: QColor):
+        """A hint of the style's texture, so the card looks like the theme does."""
+        x0, y0, x1, y1 = rect.left(), rect.top(), rect.right(), rect.bottom()
+        if style == "terminal":
+            for y in range(int(y0) + 2, int(y1), 3):
+                pt.fillRect(QRectF(x0, y, rect.width(), 1), QColor(0, 0, 0, 80))
+        elif style == "carbon":
+            for y in range(int(y0), int(y1), 4):
+                for x in range(int(x0), int(x1), 4):
+                    pt.fillRect(QRectF(x, y, 4, 4), QColor(255, 255, 255, 14) if ((x - int(x0)) // 4 + (y - int(y0)) // 4) % 2 else QColor(0, 0, 0, 40))
+            metal = QLinearGradient(0, y0, 0, y1)
+            metal.setColorAt(0, QColor(255, 255, 255, 40))
+            metal.setColorAt(1, QColor(0, 0, 0, 0))
+            pt.fillRect(rect, metal)
+        elif style == "chiptune":
+            for y in range(int(y0), int(y1), 6):
+                for x in range(int(x0), int(x1), 6):
+                    if ((x - int(x0)) // 6 + (y - int(y0)) // 6) % 2:
+                        pt.fillRect(QRectF(x, y, 3, 3), QColor(255, 255, 255, 18))
+            pt.fillRect(QRectF(x0, y1 - 3, rect.width(), 3), accent)
+        elif style == "parchment":
+            rnd = random.Random(5)
+            for _ in range(160):
+                dot = QColor(0, 0, 0, 26) if rnd.random() < 0.65 else QColor(255, 255, 255, 60)
+                pt.fillRect(QRectF(x0 + rnd.random() * rect.width(), y0 + rnd.random() * rect.height(), 1, 1), dot)
+            sheen = QLinearGradient(0, y0, 0, y1)
+            sheen.setColorAt(0, QColor(255, 255, 255, 70))
+            sheen.setColorAt(1, QColor(120, 80, 30, 34))
+            pt.fillRect(rect, sheen)
+
     def paintEvent(self, _):
         p = self._p
         pt = QPainter(self)
         pt.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        square = p.style in ("terminal", "chiptune")        # the styles with square corners
         shape = QPainterPath()
-        shape.addRoundedRect(rect, 8, 8)
+        shape.addRoundedRect(rect, 3 if square else 8, 3 if square else 8)
         bg, fg, accent = self._look()
 
         pt.save()
@@ -67,6 +101,8 @@ class _Card(QAbstractButton):
             fg, accent = QColor("#222222"), QColor("#3584e4")
         else:
             pt.fillRect(rect, bg)
+            if p.style != "default":
+                self._flair(pt, rect, p.style, bg, accent)
         pt.restore()
 
         # a name, and the look of a bit of the window: an accent pill and two faint lines
@@ -80,11 +116,12 @@ class _Card(QAbstractButton):
         pt.setPen(Qt.NoPen)
         y = rect.bottom() - 15
         pt.setBrush(accent)
-        pt.drawRoundedRect(QRectF(rect.left() + 9, y, rect.width() * 0.34, 7), 3.5, 3.5)
+        rad = 0 if square else 3.5
+        pt.drawRoundedRect(QRectF(rect.left() + 9, y, rect.width() * 0.34, 7), rad, rad)
         faint = QColor(fg)
         faint.setAlpha(110)
         pt.setBrush(faint)
-        pt.drawRoundedRect(QRectF(rect.left() + 9 + rect.width() * 0.34 + 6, y, rect.width() * 0.26, 7), 3.5, 3.5)
+        pt.drawRoundedRect(QRectF(rect.left() + 9 + rect.width() * 0.34 + 6, y, rect.width() * 0.26, 7), rad, rad)
 
         # the edge: the accent and a tick when it is the one in use
         if self.isChecked():

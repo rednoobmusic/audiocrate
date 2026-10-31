@@ -18,6 +18,8 @@ from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QMenu, QMenuBar, QSi
 HEIGHT = 34
 show_line = True   # the thin line under the bar; the "Borders between panels" setting turns it off
 aero = False       # the Frutiger Aero style adds a glass shine across the bar
+style = "default"  # the style of the theme (core/theme_styles.py), which the bar paints a little of itself
+accent = QColor("#8040c8")     # the theme's accent, for the lines of those styles
 shade = 0          # the "Frame shading" setting, 0 to 100: a gradient from lighter to darker down the bar
 _GRIP = 5        # resize strip along each edge, px
 _CORNER = 10     # and the square at each corner
@@ -162,6 +164,7 @@ class TitleBar(QWidget):
             glass.setColorAt(1.0, QColor(0, 0, 0, 50))
             p.fillRect(self.rect(), glass)
         fg = QColor(pal.windowText().color())
+        self._style_touch(p)
         if show_line:
             line = QColor(fg)
             line.setAlpha(36)
@@ -188,6 +191,29 @@ class TitleBar(QWidget):
             fg.setAlpha(210 if self._win.isActiveWindow() else 120)
             p.setPen(fg)
             p.drawText(QRect(left, 0, right - left, self.height()), Qt.AlignCenter, text)
+
+    def _style_touch(self, p: QPainter):
+        """What the bar adds in a style of its own: a glow, scan lines, brushed metal, a chunky edge or paper."""
+        w, h = self.width(), self.height()
+        if style == "terminal":
+            for y in range(2, h, 3):
+                p.fillRect(0, y, w, 1, QColor(0, 0, 0, 70))
+            p.fillRect(0, h - 1, w, 1, accent)
+        elif style == "carbon":
+            metal = QLinearGradient(0, 0, 0, h)
+            metal.setColorAt(0.0, QColor(255, 255, 255, 46))
+            metal.setColorAt(0.5, QColor(255, 255, 255, 6))
+            metal.setColorAt(1.0, QColor(0, 0, 0, 70))
+            p.fillRect(self.rect(), metal)
+            p.fillRect(0, 0, w, 1, QColor(255, 255, 255, 60))
+        elif style == "chiptune":
+            p.fillRect(0, h - 3, w, 3, accent)
+            p.fillRect(0, 0, w, 2, QColor(255, 255, 255, 40))
+        elif style == "parchment":
+            paper = QLinearGradient(0, 0, 0, h)
+            paper.setColorAt(0.0, QColor(255, 255, 255, 80))
+            paper.setColorAt(1.0, QColor(120, 80, 30, 36))
+            p.fillRect(self.rect(), paper)
 
     # move, maximise, system menu
 
