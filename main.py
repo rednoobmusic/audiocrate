@@ -160,10 +160,14 @@ if __name__ == "__main__":
     from PySide6.QtGui import QFontDatabase, QIcon
     from pathlib import Path
     _font_dir = Path(__file__).parent / "JetBrainsMono"
+    _icon_family = ""
     for _name in ("JetBrainsMonoNerdFontPropo-Regular.ttf",
                   "JetBrainsMonoNerdFontPropo-Bold.ttf",
                   "JetBrainsMonoNerdFontPropo-Italic.ttf"):
-        QFontDatabase.addApplicationFont(str(_font_dir / _name))
+        _id = QFontDatabase.addApplicationFont(str(_font_dir / _name))
+        _icon_family = _icon_family or next(iter(QFontDatabase.applicationFontFamilies(_id)), "")
+    import icon_font
+    icon_font.use(_icon_family)
 
     # the theme choice has to be known before any widget exists
     import json

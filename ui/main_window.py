@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QByteArray, QEvent, Signal, QTimer, QUrl
 from PySide6.QtGui  import QColor, QPainter, QPainterPath, QAction
+import icon_font
 from video_view import make_video_widget
 
 _STATE_FILE = plat_paths.config_dir() / "ui_state.json"
@@ -451,6 +452,7 @@ class MainWindow(QMainWindow):
 
         self._restore_layout()
         self._hook_all_tabs()
+        icon_font.sweep()       # the panels were polished before the filter above saw them
 
     def eventFilter(self, obj, event):
         t = event.type()
@@ -466,6 +468,8 @@ class MainWindow(QMainWindow):
             self._button_down = False
         if t == QEvent.Type.Polish and isinstance(obj, QTabBar) and obj.metaObject().className() == "QMainWindowTabBar":
             self._hook_dock_tabs(obj)
+        if t == QEvent.Type.Polish:
+            icon_font.fix(obj)
         if (self._titlebar is not None and event.type() == QEvent.Type.Polish
                 and isinstance(obj, QDialog) and obj.isWindow()):
             from titlebar import decorate_dialog
