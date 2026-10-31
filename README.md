@@ -264,11 +264,18 @@ python main.py                         # or just run it in place
 ### Dependencies
 
 Required: `python3`, `PySide6`, `numpy`, `scipy`, `mutagen`, `pillow`, `ffmpeg`.
-The installer detects your package manager and offers to install them.
+The installer detects your package manager and offers to install them. Debian splits PySide6 into one package
+per Qt module (`python3-pyside6.qtcore`, `.qtgui`, `.qtwidgets` and `.qtmultimedia` are needed). Three more are
+optional: `.qtmultimediawidgets` (without it the picture of a video is painted another way), `.qtopengl`
+(Milkdrop) and `.qtdbus` (the media keys). Ubuntu 24.04 has no PySide6 package at all, so use pip in a virtual
+environment there and run the installer with `AUDIOCRATE_PYTHON=/path/to/venv/bin/python bash install.sh`.
 
-Optional: `libsidplayfp` (C64 SID), `libgme` (VGM/NSF/SPC playback),
-`openmpt123` (tracker modules), `zxtune123` (AY/YM/ZX formats),
-`libprojectm` (Milkdrop visualizer), `pypresence` (Discord Rich Presence).
+Optional: `libgme` (VGM/NSF/SPC playback), `openmpt123` (tracker modules), `zxtune123` (AY/YM/ZX formats),
+`pypresence` (Discord Rich Presence). The Linux release brings its own C64 SID and Furnace players and
+a copy of projectM 4 for the Milkdrop visualizer, which it uses when the system has no projectM 4
+(Debian, Ubuntu and Fedora only have projectM 3). Furnace files need SDL2, libsndfile and ALSA, which most
+desktops already have. Qt older than 6.8 plays the sound of a video through Qt's own output, without the EQ
+and DSP chain.
 
 On Windows the media controls need the `winrt-runtime`, `winrt-Windows.Foundation`,
 `winrt-Windows.Foundation.Collections`, `winrt-Windows.Media`, `winrt-Windows.Media.Playback`,
@@ -288,7 +295,10 @@ detected from the audio.
 ## Building the Furnace player library
 
 `.fur` support uses `libfurnace_wrap.so`, a small C wrapper (in
-`_furnace_wrapper_src/desktop/`) around upstream Furnace's engine. To rebuild it:
+`_furnace_wrapper_src/desktop/`) around upstream Furnace's engine. The libraries of the Linux release
+(this one, the SID one below and projectM 4) are built by `packaging/build_native.sh` inside a Debian 12
+container, whose glibc is older than the ones of current Debian, Ubuntu and Fedora, so they load there
+(a library built on a rolling distribution asks for a newer glibc than those have). The steps by hand:
 
 ```bash
 git clone --depth 1 --branch dev250 --recurse-submodules \
@@ -326,7 +336,8 @@ with recent GCC.
 ## Building the SID player library
 
 `.sid` support uses `libsid_wrap.so`, a small C wrapper (in `_sid_wrapper_src/`)
-around the system libsidplayfp:
+around libsidplayfp. The release links libsidplayfp and libresidfp into it statically,
+because distributions ship them under other sonames. To use the one your system has:
 
 ```bash
 g++ -shared -fPIC -std=c++17 -O2 _sid_wrapper_src/sid_wrap.cpp \
