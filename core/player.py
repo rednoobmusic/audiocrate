@@ -322,7 +322,20 @@ def _extract_art_uncached(path: Path) -> bytes | None:
     return _folder_cover(path)
 
 
+# Videos the Online panel plays straight from the site. The path is made up and never written: it is what the
+# queue, the lists and the title know the video by, and the address to play from is looked up here.
+STREAMS: dict[Path, dict] = {}
+
+
+def register_stream(path: Path, url: str, title: str = "", artist: str = "", duration: float = 0.0) -> None:
+    STREAMS[path] = {"url": url, "title": title, "artist": artist, "duration": duration}
+
+
 def _tags(path: Path) -> dict:
+    s = STREAMS.get(path)
+    if s is not None:
+        return {"title": s["title"] or path.stem, "artist": s["artist"], "artists": split_artists([s["artist"]]),
+                "albumartist": "", "album": ""}
     # shared persistent cache: a file's tags are read from disk at most once
     try:
         import library_cache
@@ -793,7 +806,7 @@ class Player(QObject):
             t.fill(_tags(t.path))
         # Unavailable file (unplugged drive, deleted outside the app): skip with a
         # status message instead of handing every engine a path that can't open.
-        if not t.path.exists():
+        if t.path not in STREAMS and not t.path.exists():
             self._skip_unplayable(t, reason="File missing")
             return
         ext = t.path.suffix.lower()
@@ -994,7 +1007,8 @@ class Player(QObject):
                 QMediaPlayer.Infinite if self._mode == PlayMode.REPEAT_ONE else 1
             )
             self._vaudio.start()
-            self._media.setSource(QUrl.fromLocalFile(str(t.path)))
+            src = STREAMS.get(t.path)
+            self._media.setSource(QUrl(src["url"]) if src else QUrl.fromLocalFile(str(t.path)))
             self._media.play()
             self.track_changed.emit(t)
             self._set_out_volume(self._base_vol)

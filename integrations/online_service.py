@@ -556,6 +556,7 @@ DEFAULTS = {
     "square_art": True,          # crop cover art of audio to a square
     "channel": "nightly",        # which yt-dlp build Update installs: nightly or stable
     "notice_version": "",        # which first run notice the user accepted
+    "video_play": "stream",      # "stream": play a video from the site as it arrives, "download": fetch the file first
 }
 
 
@@ -581,6 +582,10 @@ def validate_setting(key: str, value):
     if key == "audio_format":
         if value not in ("best", "opus", "m4a", "mp3"):
             raise ValueError("Audio format is best, opus, m4a or mp3")
+        return value
+    if key == "video_play":
+        if value not in ("stream", "download"):
+            raise ValueError("Video playback is stream or download")
         return value
     if key == "video_height":
         return _int_in(value, 144, 4320, key)
@@ -1140,6 +1145,7 @@ class OnlineService(QObject):
 
     results_ready = Signal(int, list, dict)      # request id, items, info
     listing_ready = Signal(int, dict)            # request id, what yt-dlp printed for one page of a channel or playlist
+    stream_ready = Signal(int, dict)             # request id, where to play a video from: url, height, duration, title...
     request_failed = Signal(int, str, str)       # request id, error code, message
     job_updated = Signal(str, dict)              # job id, state dict
     login_changed = Signal(str)                  # provider id
@@ -1436,6 +1442,52 @@ class OnlineService(QObject):
             mid += ["--extractor-args", "youtubetab:approximate_date"]
         self._submit_list(rid, req, partial(self._do_listing, rid, req, prov, mid, u))
         return rid
+
+    def stream(self, item: dict, height: int | None = None) -> int:
+        """Where a video can be played from without fetching the file: one address that holds both picture and sound.
+        The answer comes through stream_ready, or request_failed when the site only has the picture and the sound
+        apart (most of YouTube above 360p) or the item is live, and the caller then fetches the file as before."""
+        rid, req = self._begin()
+        it = norm_item(item)
+        try:
+            u = normalize_url(it["url"])
+        except ValueError as e:
+            return self._reject(rid, "unsupported_url", str(e))
+        if is_direct_audio(u):
+            return self._reject(rid, "unsupported_url", "This is a plain file, so there is nothing to stream.")
+        prov = provider_for_url(u)
+        h = _clamp(height or self._cfg.get("video_height"), 144, 4320, 1080)
+        mid = ["--no-playlist", "--dump-single-json", "--skip-download", "--match-filters", "!is_live",
+               "-f", f"b[height<=?{h}][protocol^=http]/b[height<=?{h}]"]
+        self._submit_list(rid, req, partial(self._do_stream, rid, req, prov, mid, u, it))
+        return rid
+
+    def _do_stream(self, rid: int, req: _Req, prov: Provider, mid: list, target: str, item: dict) -> None:
+        try:
+            if req.ctl.cancelled:
+                self._fail(rid, "cancelled")
+                return
+            data, code, msg, _ = self._ytdlp_json(req.ctl, prov, mid, target)
+            if data is None:
+                self._fail(rid, code, msg)
+                return
+            url = data.get("url")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")) or data.get("requested_formats"):
+                self._fail(rid, "failed", "This one has the picture and the sound apart, so it cannot be streamed.")
+                return
+            headers = data.get("http_headers")
+            self._later(self.stream_ready.emit, rid, {
+                "url": url, "headers": dict(headers) if isinstance(headers, dict) else {},
+                "height": int(_num(data.get("height")) or 0), "duration": _num(data.get("duration")) or item.get("duration", 0),
+                "title": str(data.get("title") or item.get("title") or ""),
+                "uploader": str(data.get("uploader") or data.get("channel") or item.get("uploader") or ""),
+                "quality": quality_label(data, "video"),
+            })
+        except Exception:
+            log.exception("stream %s", target)
+            self._fail(rid, "failed")
+        finally:
+            self._end(rid)
 
     def _do_listing(self, rid: int, req: _Req, prov: Provider, mid: list, target: str) -> None:
         try:

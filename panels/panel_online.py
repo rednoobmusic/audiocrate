@@ -7,6 +7,7 @@ way that can be slow (the cache, cookie files) runs on a worker thread.
 """
 from __future__ import annotations
 
+import re
 import os
 import random
 import time
@@ -26,6 +27,7 @@ from online_channel import History, Target, item_target, link_target
 from online_channel_page import ChannelPage, PlaylistPage
 from online_providers import PROVIDERS, is_url, normalize_url, provider_for_url
 from online_service import ERROR_ACTIONS, OnlineService, human_bytes, memory_cost_mb
+from player import register_stream
 from online_settings import NOTICE_VERSION, NoticePage, SettingsPage
 from online_widgets import (CONTAINERS, LONG_S, Background, Bar, ChipBar, DownloadStrip, IconButton, ProviderButton, ResultHeader,
                             ResultsModel, ResultsView, Skeleton, StateView, ThumbLoader, WrapLabel, draw_icon, item_key,
@@ -333,6 +335,7 @@ class OnlineWidget(QWidget):
         self._views: list[dict] = []         # lists left behind by opening a playlist, for Back
         self._hist = History()               # the channel and playlist pages opened one from another
         self._base = (WELCOME, "youtube")    # the page and the site the first of them was opened from
+        self._streams: dict[int, tuple] = {}  # request id -> (job id, item, what it was asked for, chain, slot, token) of a video being looked up for streaming
         self._jobs: dict[str, dict] = {}     # job id -> its last state
         self._how: dict[str, tuple] = {}     # job id -> (what it was asked for, mode), for Try again
         self._want: dict[str, list] = {}     # job id -> the (chain, slot) pairs waiting for its file
@@ -566,6 +569,7 @@ class OnlineWidget(QWidget):
     def _wire(self):
         s = self._svc
         s.results_ready.connect(self._on_results)
+        s.stream_ready.connect(self._on_stream)
         s.request_failed.connect(self._on_failed)
         s.job_updated.connect(self._on_job)
         s.login_changed.connect(self._on_login_changed)
@@ -1059,6 +1063,10 @@ class OnlineWidget(QWidget):
         self._set_results(items, info, req)
 
     def _on_failed(self, rid: int, code: str, msg: str):
+        if rid in self._streams:                    # no address to stream from: fetch the file as before
+            jid, it, how, chain, slot, token = self._streams.pop(rid)
+            self._fetch_file(it, how, chain, "video", token, slot, jid)
+            return
         aux = self._aux.pop(rid, None)
         if aux is not None:
             self._aux_done(aux, False, {"code": code, "message": msg})
@@ -1466,13 +1474,51 @@ class OnlineWidget(QWidget):
                              + (f", {eta}" if eta else "") + ".", 5000)
 
     def _fetch(self, it: dict, how: str, chain: _Chain, mode: str, token: int = 0) -> str:
+        if mode == "video" and how != "save" and self._svc.settings().get("video_play") == "stream":
+            return self._stream(it, how, chain, token)
+        return self._fetch_file(it, how, chain, mode, token)
+
+    def _stream(self, it: dict, how: str, chain: _Chain, token: int) -> str:
+        """Play a video from the site as it arrives. A job in the strip says it is being looked up; when the site has
+        no single address with picture and sound the same job goes on as a download."""
+        rid = self._svc.stream(it)
+        jid = f"s{rid}"
+        self._streams[rid] = (jid, it, how, chain, chain.slot(how, token), token)
+        self._how[jid] = (how, "video")
+        self._jobs[jid] = {"id": jid, "state": "running", "percent": 0.0, "text": "Finding the stream", "item": it,
+                           "mode": "video", "dest": "cache", "path": "", "error": "", "error_code": "",
+                           "indeterminate": True}
+        self._refresh_mark(item_key(it))
+        self._strip_update()
+        return jid
+
+    def _on_stream(self, rid: int, info: dict):
+        found = self._streams.pop(rid, None)
+        if found is None:
+            return
+        jid, it, how, chain, slot, token = found
+        name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", (it.get("title") or info.get("title") or "video").strip())[:150]
+        path = self._svc.media_dir / "streams" / f"{name} [{it.get('id') or rid}].mp4"
+        register_stream(path, info["url"], it.get("title") or info.get("title") or "",
+                        it.get("uploader") or info.get("uploader") or "", info.get("duration") or 0.0)
+        self._jobs[jid] = dict(self._jobs[jid], state="done", percent=100.0, indeterminate=False, path="",
+                               text="Streaming", quality=info.get("quality") or "")
+        self._refresh_mark(item_key(it))
+        self._strip_update()
+        chain.resolve(slot, path)
+
+    def _fetch_file(self, it: dict, how: str, chain: _Chain, mode: str, token: int = 0, slot=None,
+                    pseudo: str = "") -> str:
         dest = "library" if how == "save" else "cache"
         self._protect_refresh()                      # the prune that ends this fetch reads what was true when it began
         jid = self._svc.start_download(it, mode, dest, how == "play", how == "next")
+        if pseudo:                                   # the "finding the stream" entry gives way to the download
+            self._jobs.pop(pseudo, None)
+            self._how.pop(pseudo, None)
         self._how[jid] = (how, mode)
         self._jobs.setdefault(jid, {"id": jid, "state": "queued", "percent": 0.0, "text": "Waiting", "item": it,
                                     "mode": mode, "dest": dest, "path": "", "error": "", "error_code": ""})
-        self._want.setdefault(jid, []).append((chain, chain.slot(how, token)))
+        self._want.setdefault(jid, []).append((chain, slot or chain.slot(how, token)))
         self._refresh_mark(item_key(it))
         self._strip_update()
         return jid

@@ -410,6 +410,15 @@ class SettingsPage(QWidget):
             self.video_h.addItem(f"{h}p", h)
         self.video_h.currentIndexChanged.connect(lambda _i: self._put("video_height", self.video_h.currentData()))
         form.addRow("Video quality", self.video_h)
+        self.video_play = QComboBox()
+        self.video_play.addItem("Stream", "stream")
+        self.video_play.addItem("Download first", "download")
+        self.video_play.setToolTip("Stream plays a video as it arrives, so it starts at once and nothing is kept, but a site "
+                                   "often has only a low quality with picture and sound together (YouTube: up to 360p). "
+                                   "When it has none the video is downloaded instead. Download first fetches the best quality "
+                                   "before it plays. Saving always downloads.")
+        self.video_play.currentIndexChanged.connect(lambda _i: self._put("video_play", self.video_play.currentData()))
+        form.addRow("Play video", self.video_play)
         form.addRow(_hint("Video sound uses the EQ, Enhance and DSP (Settings, Playback)."))
         self.max_min = QSpinBox()
         self.max_min.setRange(0, 1440)
@@ -492,9 +501,10 @@ class SettingsPage(QWidget):
 
     def refresh(self):
         s = self.svc.settings()
-        for w in (self.audio_fmt, self.video_h, self.max_min, self.square, self.concurrent, self.cache_limit, self.channel,
-                  self.rate):
+        for w in (self.audio_fmt, self.video_h, self.video_play, self.max_min, self.square, self.concurrent, self.cache_limit,
+                  self.channel, self.rate):
             w.blockSignals(True)
+        self.video_play.setCurrentIndex(max(0, self.video_play.findData(s.get("video_play", "stream"))))
         self.audio_fmt.setCurrentIndex(max(0, self.audio_fmt.findData(s.get("audio_format", "best"))))
         h = int(s.get("video_height", 1080))
         self.video_h.setCurrentIndex(min(range(len(VIDEO_HEIGHTS)), key=lambda i: abs(VIDEO_HEIGHTS[i] - h)))
@@ -504,8 +514,8 @@ class SettingsPage(QWidget):
         self.cache_limit.setValue(int(s.get("cache_max_mb", 2048)))
         self.channel.setCurrentIndex(max(0, self.channel.findData(s.get("channel", "nightly"))))
         self.rate.setText(str(s.get("rate_limit", "")))
-        for w in (self.audio_fmt, self.video_h, self.max_min, self.square, self.concurrent, self.cache_limit, self.channel,
-                  self.rate):
+        for w in (self.audio_fmt, self.video_h, self.video_play, self.max_min, self.square, self.concurrent, self.cache_limit,
+                  self.channel, self.rate):
             w.blockSignals(False)
         self.save_dir.setText(str(s.get("save_dir", "")))
         self.save_dir.setToolTip(str(s.get("save_dir", "")))

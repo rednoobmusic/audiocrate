@@ -290,7 +290,7 @@ def _native_float(dock: QDockWidget, themed: bool = False):
             grips._place()          # only a floating dock has edges to drag
     dock.topLevelChanged.connect(_on_float)
 
-from player            import Player, VIDEO_EXTS, PLAYABLE_EXTS, _GME_EXTS, extract_art
+from player            import Player, VIDEO_EXTS, PLAYABLE_EXTS, STREAMS, _GME_EXTS, extract_art
 import cli_render as _cli_render
 from analyzer          import Analyzer
 from panel_controls    import ControlsWidget
@@ -1986,7 +1986,7 @@ class MainWindow(QMainWindow):
     def open_files(self, paths):
         """Files opened from the file manager / CLI: add to the playlist and play the first."""
         picks = [Path(p) for p in paths
-                 if Path(p).is_file() and Path(p).suffix.lower() in PLAYABLE_EXTS]
+                 if Path(p) in STREAMS or (Path(p).is_file() and Path(p).suffix.lower() in PLAYABLE_EXTS)]
         if not picks:
             return
         self._playlist.add_paths(picks)
