@@ -20,6 +20,7 @@ import itertools
 import json
 import os
 import platform
+import random
 import re
 import secrets
 import shutil
@@ -63,7 +64,7 @@ LIST_TIMEOUT = 60          # seconds for a search or a listing
 STALL_TIMEOUT = 120        # seconds without output while a download is running
 LIST_SLOTS = 2
 BATCH_SIZE = 4             # this many unfinished jobs from one site count as a batch
-BATCH_GAP = 4.0            # seconds between the starts of jobs in a batch
+BATCH_GAP = 1.5            # seconds between the starts of jobs in a batch (it was 4, which held a playlist to 15 songs a minute)
 BROWSERS = ("firefox", "chrome", "chromium", "brave", "vivaldi", "edge", "opera")
 _PROFILE = re.compile(r"[A-Za-z0-9 ._-]{0,64}")
 # name, lowest version, highest version, how to read it. yt-dlp says deno 2.3, node 22 and bun up to 1.3.14.
@@ -549,7 +550,7 @@ def _download_dir() -> str:
 DEFAULTS = {
     "save_dir": None,            # filled in per user: ~/Music/AudioCrate
     "cache_max_mb": 2048, "audio_format": "best", "video_height": 1080, "max_file_mb": 4096,
-    "concurrent": 2, "rate_limit": "", "cookies": {}, "recent": [],
+    "concurrent": 4, "rate_limit": "", "cookies": {}, "recent": [],
     # beyond the basic set
     "max_minutes": 180,          # longest audio item it will fetch; 0 turns the limit off
     "square_art": True,          # crop cover art of audio to a square
@@ -586,7 +587,7 @@ def validate_setting(key: str, value):
     if key == "max_file_mb":
         return _int_in(value, 16, 1_000_000, key)
     if key == "concurrent":
-        return _int_in(value, 1, 4, key)
+        return _int_in(value, 1, 8, key)
     if key == "rate_limit":
         s = str(value or "").strip()
         if s and not re.fullmatch(r"\d+(?:\.\d+)?[KkMm]?", s):
@@ -1700,7 +1701,8 @@ class OnlineService(QObject):
             return
         with self._pace_lock:
             now = time.monotonic()
-            wait = max(0.0, self._last_start.get(prov, 0.0) + BATCH_GAP - now)
+            gap = BATCH_GAP * (0.75 + 0.5 * random.random())       # a little uneven, so the starts do not look like a clock
+            wait = max(0.0, self._last_start.get(prov, 0.0) + gap - now)
             self._last_start[prov] = now + wait
         if wait and job.ctl.event.wait(wait):
             raise _Cancel()
@@ -1731,13 +1733,14 @@ class OnlineService(QObject):
             fmt = s["audio_format"]
             # m4a first when keeping the source codec, so no lossy step is added; opus and mp3
             # start from the best stream instead
-            a += ["-f", "ba[ext=m4a]/ba/b" if fmt in ("best", "m4a") else "ba/b", "-x", "--audio-format", fmt]
+            a += ["-f", "ba[ext=m4a]/ba/b" if fmt in ("best", "m4a") else "ba/b", "-x", "--audio-format", fmt,
+                  "--concurrent-fragments", "4"]
             if fmt == "mp3":
                 a += ["--audio-quality", "0"]
         else:
             h = s["video_height"]
             a += ["-f", f"bv*[height<=?{h}]+ba/b[height<=?{h}]/b", "-S", "vcodec:h264,res,acodec:aac",
-                  "--merge-output-format", "mp4", "--concurrent-fragments", "3"]
+                  "--merge-output-format", "mp4", "--concurrent-fragments", "4"]
         return a + self._tweak_args(tweaks)
 
     def _fetch_ytdlp(self, job: _Job, url: str, target: Path, tmp: Path) -> Path:

@@ -8,6 +8,7 @@
 - Checked boxes show a check mark in the themes of their own, and the logo in the title bar takes the text colour on a light theme.
 
 ### Changed
+- Online downloads of playlists, channels and artists are quicker. A batch from one site started a song at most every 4 seconds, which held it to 15 songs a minute however many fetches ran at once. The gap is 1.5 seconds now (a little uneven, so the starts do not look like a clock), "Fetches at once" starts at 4 and goes up to 8, and audio fragments are fetched four at a time. A simulated 16 song playlist at 3.5 seconds a song took 60 seconds before and 25 after.
 - The Waterfall's spectrum strip is off by default (Waterfall settings, Display, Spectrum strip turns it on). Rows per second go up to 1000 instead of 240, which costs about a quarter of a core at the top. The oscilloscope window goes up to 2000 ms instead of 500, and a window that long is drawn as the band the wave swings in.
 - Settings is easier to take in. The long explanations under settings are behind a small ? next to the setting now, and a click on it opens the text. Sections that most people never need are folded until you open them: Oscilloscope, Colours, Artist names, Logs, Lighting, Backup and reset, Discord, and Last.fm and Libre.fm until you turn them on. The colour rows grey out while the system style is in use.
 
