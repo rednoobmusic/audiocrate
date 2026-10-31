@@ -11,8 +11,12 @@ from PySide6.QtCore import QObject, Signal
 
 from applog import log
 
+MPRISService = None
 if sys.platform != "win32":
-    from mpris import MPRISService
+    try:
+        from mpris import MPRISService
+    except ImportError as e:        # PySide6 split into packages (Debian): QtDBus may be the one that is not installed
+        log.warning("media session: the media keys and the desktop's media controls are off (%s)", e)
 
 
 class NullSession(QObject):
@@ -33,7 +37,7 @@ class NullSession(QObject):
 
 def make_session(player, window):
     if sys.platform != "win32":
-        return MPRISService(player, window)
+        return MPRISService(player, window) if MPRISService is not None else NullSession(window)
     try:
         from smtc import SmtcSession
         return SmtcSession(player, window)
