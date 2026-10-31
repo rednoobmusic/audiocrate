@@ -63,7 +63,7 @@ DEFAULTS = {
     "floor": -90.0, "ceil": -10.0, "gamma": 1.0, "bright": 0, "tilt": 3.0,
     "auto": False, "auto_release": 6.0,
     "t_avg": 40, "f_smooth": "Off",
-    "cmap": "Magma", "follow": False, "reverse": False,
+    "cmap": "Magma", "follow": True, "reverse": False,
     "custom": "#000000, #2a0a5e, #c0392b, #f5b041, #ffffff",
     "direction": "Down", "labels": True, "legend": True, "grid": True,
     "strip_on": False, "strip": 18, "peak": True,

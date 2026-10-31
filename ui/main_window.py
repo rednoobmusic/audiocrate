@@ -1106,6 +1106,7 @@ class MainWindow(QMainWindow):
         self._refresh_idle_accents()
         if self._current_art_palette() is None:
             self._rgb.set_accent(None, acc)
+            self._waterfall.set_accent(None)       # colours left over from the album art would hide the theme's
         self._reapply_qss()
 
     def _current_art_palette(self):
@@ -1576,6 +1577,8 @@ class MainWindow(QMainWindow):
             self._controls._wf.set_accent(None)
             self._eq_panel.set_accent(None)
             self._dsp_panel.set_accent(None)
+            self._waterfall.set_accent(None)
+            self._online.set_accent(None)
             np = getattr(self, "_np_widget", None)
             if np is not None:
                 np.set_accent(None)
