@@ -725,6 +725,8 @@ class FurPlayer(QObject):
     # cleanup
 
     def __del__(self):
+        if not hasattr(self, "_render_stop"):
+            return                      # __init__ stopped before it got this far (no libfurnace_wrap)
         self._render_stop.set()
         if self._render_thread:
             try:
