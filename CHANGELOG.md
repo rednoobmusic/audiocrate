@@ -3,13 +3,16 @@
 ## 1.7.1 (2026-10-30)
 
 ### Added
-- A theme picker at the top of Settings, Appearance: eighteen themes as cards, each painted in its own colours. System follows your desktop, AudioCrate and Frutiger Aero are the two looks that were there, and there are eleven dark and four light ones (Midnight, Black, Nord, Dracula, Gruvbox, Solarized, Tokyo Night, Rosé Pine, Catppuccin, Forest, Crimson, Light, Paper, Latte). A click applies it at once. Customize under it still sets the accent, background and text yourself, and has a new Corners setting for how round the buttons, fields and menus are. "Colours follow the album art" is its own box now.
+- A theme picker at the top of Settings, Appearance: 22 themes as cards, each painted in its own colours. System follows your desktop, AudioCrate and Frutiger Aero are the two looks that were there, four more have a style and textures of their own (Terminal, Carbon, Chiptune, Parchment), and there are eleven dark and four light ones (Midnight, Black, Nord, Dracula, Gruvbox, Solarized, Tokyo Night, Rosé Pine, Catppuccin, Forest, Crimson, Light, Paper, Latte). A click applies it at once. Customize under it still sets the accent, background and text yourself, and has a new Corners setting for how round the buttons, fields and menus are. "Colours follow the album art" is its own box now.
+- The oscilloscope can draw its wave as bars (Settings, Visuals, Oscilloscope, Draw as bars), with a bar width of 1 to 12 px.
 - Checked boxes show a check mark in the themes of their own, and the logo in the title bar takes the text colour on a light theme.
 
 ### Changed
+- The Waterfall's spectrum strip is off by default (Waterfall settings, Display, Spectrum strip turns it on). Rows per second go up to 1000 instead of 240, which costs about a quarter of a core at the top. The oscilloscope window goes up to 2000 ms instead of 500, and a window that long is drawn as the band the wave swings in.
 - Settings is easier to take in. The long explanations under settings are behind a small ? next to the setting now, and a click on it opens the text. Sections that most people never need are folded until you open them: Oscilloscope, Colours, Artist names, Logs, Lighting, Backup and reset, Discord, and Last.fm and Libre.fm until you turn them on. The colour rows grey out while the system style is in use.
 
 ### Fixed
+- The links in the Discord help did not open for some people. The help bubble is an ordinary widget in the window now and not a popup window.
 - The player did not start where PySide6 comes without QtMultimediaWidgets, which Debian ships as a package of its own. The picture of a video is now painted from Qt's video sink when that part is missing.
 - The player did not start on Qt older than 6.8, which has no sound tap for video. Video then plays through Qt's own sound output, without the EQ and DSP chain.
 - Without QtDBus the player no longer stops at start up. The media keys are off instead.
