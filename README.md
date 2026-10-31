@@ -9,7 +9,7 @@ visualizers as an MP3 or FLAC.
 
 Written in Python with PySide6 (Qt 6). Linux is the version that has had the most
 use. The Windows version is a preview, and there is no macOS version. The
-downloads, more screenshots and a short video are at
+downloads and more screenshots are at
 [audiocrate.net](https://audiocrate.net), and the zips are on the
 [releases page](https://github.com/rednoobmusic/audiocrate/releases).
 
