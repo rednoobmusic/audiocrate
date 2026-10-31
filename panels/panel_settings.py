@@ -45,6 +45,8 @@ _DEFAULTS = {
     "osc_trigger":       True,
     "osc_fps":           60,           # 241 = unlimited
     "osc_vsync":         False,
+    "osc_bars":          False,       # draw the scope as bars
+    "osc_bar_width":     3,           # px
     "pb_fade_steps":     2,
     "pb_fade_interval":  5,
     "lyr_font_size":     18,
@@ -735,8 +737,9 @@ class SettingsWidget(QWidget):
         c = self._cfg
         form = _section(form, "Oscilloscope", fold=True)
 
-        self._osc_win_sl, self._osc_win_lbl = _hslider(5, 500, c["osc_window_ms"], " ms",
+        self._osc_win_sl, self._osc_win_lbl = _hslider(5, 2000, c["osc_window_ms"], " ms",
             tip="How much time the scope shows at once. Smaller = more zoomed-in on the waveform.")
+        self._osc_win_sl.setPageStep(25)
         _field(form, "Window", _row(self._osc_win_sl, self._osc_win_lbl))
 
         self._osc_gain_sl, self._osc_gain_lbl = _hslider(10, 500, c["osc_gain"], "%",
@@ -751,6 +754,17 @@ class SettingsWidget(QWidget):
             tip="Thickness of the scope trace, in pixels.",
             fmt=lambda v: f"{v / 10:g} px")
         _field(form, "Line width", _row(self._osc_lw_sl, self._osc_lw_lbl))
+
+        self._osc_bars = QCheckBox("Draw as bars")
+        self._osc_bars.setChecked(c.get("osc_bars", False))
+        form.addRow(_check(self._osc_bars,
+                           "Draws the wave as upright bars, each as high as the wave gets in its part of the window, "
+                           "instead of one line."))
+        self._osc_barw_sl, self._osc_barw_lbl = _hslider(1, 12, c.get("osc_bar_width", 3), " px")
+        _field(form, "Bar width", _row(self._osc_barw_sl, self._osc_barw_lbl))
+        self._osc_lw_sl.setEnabled(not self._osc_bars.isChecked())
+        self._osc_barw_sl.setEnabled(self._osc_bars.isChecked())
+        self._osc_bars.toggled.connect(lambda on: (self._osc_lw_sl.setEnabled(not on), self._osc_barw_sl.setEnabled(on)))
 
         self._osc_fps_sl, self._osc_fps_lbl = _hslider(
             15, 241, c.get("osc_fps", 60), tip="Frames per second. The far end is Unlimited, "
@@ -782,6 +796,8 @@ class SettingsWidget(QWidget):
         self._osc_lw_sl.valueChanged.connect(lambda _: self._apply_oscilloscope())
         self._osc_fps_sl.valueChanged.connect(lambda _: self._apply_oscilloscope())
         self._osc_vsync.toggled.connect(lambda _: self._apply_oscilloscope())
+        self._osc_bars.toggled.connect(lambda _: self._apply_oscilloscope())
+        self._osc_barw_sl.valueChanged.connect(lambda _: self._apply_oscilloscope())
         self._osc_trigger.toggled.connect(lambda _: self._apply_oscilloscope())
 
     def _tab_appearance(self) -> QWidget:
@@ -1465,6 +1481,8 @@ class SettingsWidget(QWidget):
             "osc_trigger":    self._osc_trigger.isChecked(),
             "osc_fps":        self._osc_fps_sl.value(),
             "osc_vsync":      self._osc_vsync.isChecked(),
+            "osc_bars":       self._osc_bars.isChecked(),
+            "osc_bar_width":  self._osc_barw_sl.value(),
         })
         self.save()
         self.oscilloscope_changed.emit({
@@ -1475,6 +1493,8 @@ class SettingsWidget(QWidget):
             "trigger":    self._cfg["osc_trigger"],
             "fps":        self._cfg["osc_fps"],
             "vsync":      self._cfg["osc_vsync"],
+            "bars":       self._cfg["osc_bars"],
+            "bar_width":  self._cfg["osc_bar_width"],
         })
 
     def _apply_lyrics(self):
@@ -1601,6 +1621,8 @@ class SettingsWidget(QWidget):
         self._osc_trigger.setChecked(self._cfg["osc_trigger"])
         self._osc_fps_sl.setValue(self._cfg["osc_fps"])
         self._osc_vsync.setChecked(self._cfg["osc_vsync"])
+        self._osc_bars.setChecked(self._cfg["osc_bars"])
+        self._osc_barw_sl.setValue(self._cfg["osc_bar_width"])
         # Lyrics
         self._lyr_font_sl.setValue(self._cfg["lyr_font_size"])
         # Appearance

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QWidget, QDialog, QFormLayout, QDialogButtonBox, QSlider, QSpinBox,
     QCheckBox, QMenu,
 )
-from PySide6.QtCore    import Qt, QTimer, QPointF, Signal
+from PySide6.QtCore    import Qt, QTimer, QPointF, QRectF, Signal
 from PySide6.QtGui     import QPainter, QColor, QPen, QPolygonF, QValidator
 
 import power
@@ -33,6 +33,8 @@ class _Cfg:
     trigger    = True
     fps        = 60     # 241 and up means unlimited
     vsync      = False  # draw one frame per display refresh instead of on a timer
+    bars       = False  # draw the wave as bars (the height of the wave in each) instead of a line
+    bar_width  = 3      # px
 
 
 class _FpsSpin(QSpinBox):
@@ -60,7 +62,7 @@ class _ConfigDialog(QDialog):
         form = QFormLayout(self)
 
         self._win = QSpinBox()
-        self._win.setRange(5, 500)
+        self._win.setRange(5, 2000)
         self._win.setSuffix(" ms")
         self._win.setValue(cfg.window_ms)
         form.addRow("Window", self._win)
@@ -80,6 +82,18 @@ class _ConfigDialog(QDialog):
         self._lw.setRange(5, 40)
         self._lw.setValue(int(cfg.line_width * 10))
         form.addRow("Line width", self._lw)
+
+        self._bars = QCheckBox("Draw as bars")
+        self._bars.setChecked(cfg.bars)
+        form.addRow("", self._bars)
+
+        self._bar_w = QSpinBox()
+        self._bar_w.setRange(1, 12)
+        self._bar_w.setSuffix(" px")
+        self._bar_w.setValue(cfg.bar_width)
+        self._bar_w.setEnabled(cfg.bars)
+        self._bars.toggled.connect(self._bar_w.setEnabled)
+        form.addRow("Bar width", self._bar_w)
 
         self._fps = _FpsSpin()
         self._fps.setRange(15, 241)
@@ -107,6 +121,8 @@ class _ConfigDialog(QDialog):
         self._cfg.smooth     = self._smooth.value()
         self._cfg.line_width = self._lw.value() / 10.0
         self._cfg.trigger    = self._trig.isChecked()
+        self._cfg.bars       = self._bars.isChecked()
+        self._cfg.bar_width  = self._bar_w.value()
         self._cfg.fps        = self._fps.value()
         self._cfg.vsync      = self._vsync.isChecked()
         self.accept()
@@ -130,6 +146,8 @@ class OscilloscopeWidget(QWidget):
         self._cfg      = _Cfg()
         self._wave     = np.zeros(0, dtype=np.float32)
         self._env      = 1e-6
+        self._wave_bars = False  # self._wave holds one height per bar (0 to 1) and not the points of a line
+        self._wave_env  = False  # or a low and a high point for every pixel, for a window of many samples to a pixel
         self._trig     = None    # absolute sample index the last frame locked to
         self._pos0     = 0       # absolute index of that frame's first sample
         self._system_accent = False   # follow OS highlight when on system theme
@@ -255,7 +273,8 @@ class OscilloscopeWidget(QWidget):
         # Capture extra when triggering so the lock point can sit centred, with
         # pre-trigger data filling the left half: a scope shows the context before
         # the trigger, not just after it.
-        cap = 2 * n if self._cfg.trigger else n
+        trig = self._cfg.trigger and self._cfg.window_ms <= 500       # a window that long has no wave to hold still
+        cap = 2 * n if trig else n
         pos_ms = self._player.position_ms
         window = self._analyzer.get_audio_window(pos_ms, cap)
         if (window is None or len(window) < n) and cap > n:
@@ -274,7 +293,7 @@ class OscilloscopeWidget(QWidget):
         n = min(n, L)
         start = 0
         locked = False
-        if self._cfg.trigger and L > n:
+        if trig and L > n:
             half = n // 2
             # Lock to the bass: low-pass (~60 Hz) before the crossing search so we
             # don't re-trigger on HF wiggles riding on a slow sub wave. Zero-phase
@@ -312,6 +331,48 @@ class OscilloscopeWidget(QWidget):
         else:
             self._env *= 0.995
         norm = raw / self._env if self._env > 1e-6 else raw
+
+        if self._cfg.bars:
+            # One bar for each stretch of the window: how high the wave gets in it
+            pitch = max(1, int(self._cfg.bar_width)) + max(1, round(int(self._cfg.bar_width) / 3))
+            nb = max(1, W // pitch)
+            mag = np.abs(norm)
+            if len(mag) >= nb:
+                edges = np.linspace(0, len(mag), nb + 1).astype(np.int64)[:-1]
+                peaks = np.maximum.reduceat(mag, edges)
+            else:
+                peaks = np.interp(np.linspace(0, len(mag) - 1, nb), np.arange(len(mag)), mag)
+            k = min(int(self._cfg.smooth), 3)
+            if k > 0 and nb > 2 * k + 1:
+                peaks = np.convolve(peaks, np.ones(2 * k + 1, dtype=np.float32) / (2 * k + 1), mode="same")
+            taper = max(2, nb // 24)
+            if nb > 2 * taper:
+                ramp = ((1.0 - np.cos(np.pi * np.arange(taper) / taper)) * 0.5).astype(np.float32)
+                peaks[:taper] *= ramp
+                peaks[-taper:] *= ramp[::-1]
+            self._wave, self._wave_bars, self._wave_env = peaks.astype(np.float32), True, False
+            if redraw:
+                self.update()
+            return
+        self._wave_bars = False
+
+        if len(norm) >= 8 * W:
+            # A long window puts many samples under each pixel, and their average is close to nothing for a wave that
+            # swings up and down. Draw how far the wave swings in each pixel instead: a band, like a scope zoomed out.
+            edges = np.linspace(0, len(norm), W + 1).astype(np.int64)[:-1]
+            disp = np.empty(2 * W, dtype=np.float32)
+            disp[0::2] = np.minimum.reduceat(norm, edges)
+            disp[1::2] = np.maximum.reduceat(norm, edges)
+            taper = max(2, W // 24)
+            if W > 2 * taper:
+                ramp = np.repeat(((1.0 - np.cos(np.pi * np.arange(taper) / taper)) * 0.5).astype(np.float32), 2)
+                disp[:2 * taper] *= ramp
+                disp[-2 * taper:] *= ramp[::-1]
+            self._wave, self._wave_env = disp, True
+            if redraw:
+                self.update()
+            return
+        self._wave_env = False
 
         if len(norm) > W:
             # More samples than pixels: average the span each pixel covers.
@@ -383,14 +444,31 @@ class OscilloscopeWidget(QWidget):
             p.end()
             return
 
-        p.setRenderHint(QPainter.Antialiasing, True)
-
         gain = self._cfg.gain / 100.0
         mid  = H * 0.5
         amp  = mid * 0.9 * gain
 
-        w  = min(len(wave), W)
-        xs = np.linspace(0.0, W - 1.0, w)
+        if self._wave_bars:
+            bw = max(1, int(self._cfg.bar_width))
+            pitch = bw + max(1, round(bw / 3))
+            n = len(wave)
+            x0 = (W - (n * pitch - (pitch - bw))) / 2.0              # centred, so the spare pixels split to both sides
+            hs = np.minimum(wave * amp, mid)
+            p.setPen(Qt.NoPen)
+            p.setBrush(self._lerp.color)
+            p.drawRects([QRectF(x0 + i * pitch, mid - max(0.5, float(h)), bw, 2.0 * max(0.5, float(h)))
+                         for i, h in enumerate(hs)])
+            p.end()
+            return
+
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        if self._wave_env:
+            w  = len(wave)
+            xs = np.repeat(np.linspace(0.0, W - 1.0, w // 2), 2)
+        else:
+            w  = min(len(wave), W)
+            xs = np.linspace(0.0, W - 1.0, w)
         ys = np.clip(mid - wave[:w] * amp, 0.0, H - 1.0)
 
         poly = QPolygonF([QPointF(float(x), float(y)) for x, y in zip(xs, ys)])
@@ -421,6 +499,8 @@ class OscilloscopeWidget(QWidget):
         if "smooth"     in d: self._cfg.smooth     = max(0, d["smooth"])
         if "line_width" in d: self._cfg.line_width = d["line_width"]
         if "trigger"    in d: self._cfg.trigger    = bool(d["trigger"])
+        if "bars"       in d: self._cfg.bars       = bool(d["bars"])
+        if "bar_width"  in d: self._cfg.bar_width  = max(1, min(12, int(d["bar_width"])))
         if "fps"        in d: self._cfg.fps        = max(15, min(241, int(d["fps"])))
         if "vsync"      in d: self._cfg.vsync      = bool(d["vsync"])
         if "fps" in d or "vsync" in d:
@@ -441,6 +521,8 @@ class OscilloscopeWidget(QWidget):
                 "osc_smooth":     self._cfg.smooth,
                 "osc_line_width": int(round(self._cfg.line_width * 10)),
                 "osc_trigger":    self._cfg.trigger,
+                "osc_bars":       self._cfg.bars,
+                "osc_bar_width":  self._cfg.bar_width,
                 "osc_fps":        self._cfg.fps,
                 "osc_vsync":      self._cfg.vsync,
             })

@@ -908,6 +908,9 @@ class MainWindow(QMainWindow):
             s._osc_fps_sl.setValue(d["osc_fps"])
         if "osc_vsync" in d:
             s._osc_vsync.setChecked(d["osc_vsync"])
+        if "osc_bars" in d:
+            s._osc_bars.setChecked(d["osc_bars"])
+            s._osc_barw_sl.setValue(d["osc_bar_width"])
         s._apply_oscilloscope()
 
     def _on_queue_changed(self):
@@ -1500,6 +1503,8 @@ class MainWindow(QMainWindow):
             "trigger":    s.get("osc_trigger", True),
             "fps":        s.get("osc_fps", 60),
             "vsync":      s.get("osc_vsync", False),
+            "bars":       s.get("osc_bars", False),
+            "bar_width":  s.get("osc_bar_width", 3),
         })
         self._lyrics.set_font_size(s.get("lyr_font_size", 18))
         self._art_color_on   = s.get("art_color_theme", False)

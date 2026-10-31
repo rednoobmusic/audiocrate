@@ -43,7 +43,7 @@ _SMOOTH_OCT = {"Off": 0.0, "1/12 octave": 1 / 12, "1/6 octave": 1 / 6,
                "1/3 octave": 1 / 3, "1/2 octave": 0.5, "1 octave": 1.0}
 DIRECTIONS = ("Down", "Up", "Left", "Right")      # where the history goes
 TILTS = (0.0, 3.0, 4.5, 6.0)                      # dB per octave added, so pink noise reads flat
-_MAX_ROWS_PER_FRAME = 12
+_MAX_ROWS_PER_FRAME = 48       # most rows one frame adds; 1000 rows a second is 17 a frame at 60 fps
 
 # The history: _STORE_ROWS rows of _M columns, log spaced from _M_LO to _M_HI Hz, kept as
 # (dB + 200) * 100 in 16 bits (silence is 0, so an untouched row costs no memory). The
@@ -66,7 +66,7 @@ DEFAULTS = {
     "cmap": "Magma", "follow": False, "reverse": False,
     "custom": "#000000, #2a0a5e, #c0392b, #f5b041, #ffffff",
     "direction": "Down", "labels": True, "legend": True, "grid": True,
-    "strip_on": True, "strip": 18, "peak": True,
+    "strip_on": False, "strip": 18, "peak": True,
     "fps": 60, "vsync": False,
 }
 
@@ -193,7 +193,7 @@ def clean_config(d: dict) -> dict:
         if c[k] not in allowed:
             c[k] = fallback
     c["tilt"] = min(TILTS, key=lambda t: abs(t - c["tilt"]))
-    c["rate"] = max(5, min(240, c["rate"]))
+    c["rate"] = max(5, min(1000, c["rate"]))
     c["fmin"] = max(10, min(c["fmin"], 20000))
     c["fmax"] = max(c["fmin"] + 100, min(c["fmax"], 24000))
     c["floor"] = max(-140.0, min(-20.0, c["floor"]))
@@ -304,7 +304,7 @@ _SECTIONS = [
         ("window", "Window", "combo", WINDOWS),
         ("kaiser_beta", "Kaiser beta", "dspin", (0.5, 20.0, 1, 0.5)),
         ("pad", "Zero padding", "combo", (1, 2, 4)),
-        ("rate", "Rows per second", "spin", (5, 240, "")),
+        ("rate", "Rows per second", "spin", (5, 1000, "")),
     ]),
     ("Frequency", [
         ("scale", "Axis", "combo", SCALES),
