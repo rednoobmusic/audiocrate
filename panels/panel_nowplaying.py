@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePo
 from PySide6.QtCore    import Qt, Signal, QTimer, QPointF
 from PySide6.QtGui     import (QPixmap, QPainter, QPainterPath, QColor, QMouseEvent,
                                QRadialGradient, QTransform)
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from video_view import make_video_widget
 
 from player import Player, decode_art, extract_art, VIDEO_EXTS
 from steady_label import SteadyLabel
@@ -386,7 +386,7 @@ class NowPlayingWidget(QWidget):
         root.setSpacing(8)
 
         self._art = _ArtLabel()
-        self._np_video = QVideoWidget()
+        self._np_video = make_video_widget()
         self._np_video.setAspectRatioMode(Qt.KeepAspectRatio)
         self._np_video.setStyleSheet("background: black;")
         self._np_video.hide()
@@ -454,7 +454,7 @@ class NowPlayingWidget(QWidget):
         self._time_row_widget.setVisible(visible)
 
     @property
-    def video_widget(self) -> QVideoWidget:
+    def video_widget(self) -> QWidget:
         return self._np_video
 
     def _on_track(self, track):

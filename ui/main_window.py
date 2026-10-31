@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QByteArray, QEvent, Signal, QTimer, QUrl
 from PySide6.QtGui  import QColor, QPainter, QPainterPath, QAction
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from video_view import make_video_widget
 
 _STATE_FILE = plat_paths.config_dir() / "ui_state.json"
 
@@ -1245,7 +1245,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         self._viz   = VisualizerWidget(self._analyzer, self._player)
 
-        self._video = QVideoWidget()
+        self._video = make_video_widget()
         self._video.setAspectRatioMode(Qt.KeepAspectRatio)
         self._video.setStyleSheet("background: black;")
 
