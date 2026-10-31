@@ -1159,8 +1159,13 @@ class MainWindow(QMainWindow):
         if palette == getattr(self, "_last_art_palette", "unset"):
             return
         self._last_art_palette = palette
+        if palette is None and self._system_theme:
+            # no cover: the system look, not the colours of a theme chosen before System
+            self._reapply_qss()
+            self._canvas_accents(None)
+            return
         self._restyle_panels(self._make_qss(palette), palette,
-                             lambda: self._canvas_accents(palette))
+                             lambda: (self._canvas_accents(palette), self._restyle_toggle_buttons()))
 
     def _canvas_accents(self, palette):
         """The widgets that draw their own colours switch in the same instant the

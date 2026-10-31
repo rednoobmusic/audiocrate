@@ -12,7 +12,7 @@
 - Settings is easier to take in. The long explanations under settings are behind a small ? next to the setting now, and a click on it opens the text. Sections that most people never need are folded until you open them: Oscilloscope, Colours, Artist names, Logs, Lighting, Backup and reset, Discord, and Last.fm and Libre.fm until you turn them on. The colour rows grey out while the system style is in use.
 
 ### Fixed
-- With System chosen and "Colours follow the album art" on, a song without a cover brought back the colours of the theme chosen before System, and the title bars kept the style of that theme. System stays the system look now until a cover gives it colours.
+- With System chosen and "Colours follow the album art" on, a song without a cover brought back the colours of the theme chosen before System, and the title bars kept the style of that theme. System stays the system look now until a cover gives it colours, and the next song without one goes back to it. The buttons that stay lit (shuffle, EQ and the others) take the cover's colours as well, where some kept the system's.
 - The Waterfall kept the colours of the album art after the art colours were turned off, so changing the theme left its colours as they were. It lets go of them now, and "Follow the app colours" is on by default, so a new install has the Waterfall in the colours of the theme.
 - The links in the Discord help did not open for some people. The help bubble is an ordinary widget in the window now and not a popup window.
 - The player did not start where PySide6 comes without QtMultimediaWidgets, which Debian ships as a package of its own. The picture of a video is now painted from Qt's video sink when that part is missing.
