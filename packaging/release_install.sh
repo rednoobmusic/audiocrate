@@ -13,7 +13,8 @@ PYNAME="$(basename "$PYBIN")"
 [ -n "${AUDIOCRATE_PYTHON:-}" ] && PYNAME="$PYBIN"      # a virtual environment's python is started by its full path
 
 # What the player needs, one import at a time so the list says which part is missing.
-bad="$("$PYBIN" - <<'PY' 2>/dev/null || true
+check_modules() {
+    "$PYBIN" - <<'PY' 2>/dev/null || true
 import importlib
 for m in ("PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "PySide6.QtMultimedia", "numpy", "scipy", "mutagen", "PIL"):
     try:
@@ -21,8 +22,9 @@ for m in ("PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "PySide6.QtMul
     except Exception:
         print(m)
 PY
-)"
-extras="$("$PYBIN" - <<'PY' 2>/dev/null || true
+}
+check_extras() {
+    "$PYBIN" - <<'PY' 2>/dev/null || true
 import importlib
 for m, what in (("PySide6.QtMultimediaWidgets", "video picture (works without)"), ("PySide6.QtDBus", "media keys"),
                 ("PySide6.QtOpenGL", "Milkdrop")):
@@ -31,7 +33,9 @@ for m, what in (("PySide6.QtMultimediaWidgets", "video picture (works without)")
     except Exception:
         print(m.split(".")[1] + ": " + what)
 PY
-)"
+}
+bad="$(check_modules)"
+extras="$(check_extras)"
 miss=""
 [ -n "$bad" ] && miss="python modules ($(echo $bad | tr ' ' ','))"
 command -v ffmpeg >/dev/null 2>&1 || miss="${miss:+$miss, }ffmpeg"
@@ -53,6 +57,30 @@ if [ -n "$miss" ]; then
         echo "Install these with your package manager (or: pip install --user PySide6 numpy scipy mutagen pillow + ffmpeg)."
     fi
 fi
+
+# What no package supplied (Ubuntu 24.04 has no PySide6 at all): a private Python environment with pip, next to the
+# program and not inside it, so installing again does not delete it. It reuses the system's numpy and scipy.
+if [ -z "${AUDIOCRATE_PYTHON:-}" ]; then
+    bad="$(check_modules)"
+    if [ -n "$bad" ]; then
+        VENV="$HOME/.local/share/audiocrate-venv"
+        echo "Still missing: $(echo $bad | tr ' ' ',')"
+        read -rp "Get them with pip into a private environment in $VENV (a download of about 450 MB)? [Y/n] " a || a=Y
+        if ! [[ "${a:-Y}" =~ ^[Nn] ]]; then
+            if "$PYBIN" -m venv --system-site-packages "$VENV" \
+               && "$VENV/bin/python" -m pip install --quiet --upgrade pip \
+               && "$VENV/bin/python" -m pip install PySide6-Essentials PySide6-Addons numpy scipy mutagen pillow; then
+                PYBIN="$VENV/bin/python"
+                PYNAME="$PYBIN"                 # the launcher starts the environment's python by its full path
+                bad="$(check_modules)"
+                extras="$(check_extras)"
+            else
+                echo "The environment could not be made (Debian and Ubuntu need the python3-venv package for it)."
+            fi
+        fi
+    fi
+fi
+[ -n "$bad" ] && echo "Still missing, so AudioCrate may not start: $(echo $bad | tr ' ' ',')"
 [ -n "$extras" ] && { echo "Optional parts of PySide6 that are not installed, so these features are off:"; echo "$extras" | sed 's/^/  /'; }
 
 echo "Installing AudioCrate -> $APP"

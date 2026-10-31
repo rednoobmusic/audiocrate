@@ -24,7 +24,7 @@
 - Furnace (`.fur`) and SID files did not play on Debian, Ubuntu and Fedora. The Furnace library asked for a newer glibc than those have, and the SID library for a libsidplayfp they do not ship. Both are built on Debian 12 now, with libsidplayfp linked in, and `packaging/build_native.sh` does it.
 - `libgme` was not found on Debian, Ubuntu and Fedora, which only ship `libgme.so.0`, so VGM, NSF and SPC files did not play.
 - The Milkdrop visualizer needs projectM 4, and Debian, Ubuntu and Fedora ship projectM 3. The Linux release now carries projectM 4 and uses it when the system has none. Where Milkdrop cannot start, the panel says why and the other visualizers go on working.
-- The Linux installer named PySide6 packages that Debian does not have. It now lists the Qt parts, says which optional ones are missing, and takes a virtual environment through `AUDIOCRATE_PYTHON`.
+- The Linux installer named PySide6 packages that Debian does not have. It now lists the Qt parts, says which optional ones are missing, and takes a virtual environment through `AUDIOCRATE_PYTHON`. Where the system has no PySide6 package at all (Ubuntu 24.04), the installer offers to make that environment itself with pip, in `~/.local/share/audiocrate-venv`, and the uninstaller removes it.
 
 ## 1.7.0 (2026-10-30)
 
