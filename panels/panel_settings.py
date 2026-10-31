@@ -9,10 +9,10 @@ from PySide6.QtWidgets import (
     QStackedWidget, QButtonGroup, QGridLayout, QLabel, QSlider, QCheckBox,
     QScrollArea, QFrame,
     QSizePolicy, QPushButton, QFileDialog, QComboBox,
-    QMessageBox, QFontComboBox, QLineEdit, QColorDialog, QPlainTextEdit,
+    QMessageBox, QFontComboBox, QLineEdit, QColorDialog, QPlainTextEdit, QApplication, QGraphicsDropShadowEffect,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPalette, QPen, QPolygonF
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPalette, QPen, QPolygonF
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaDevices
 
 from artists import DEFAULT_EXCEPTIONS, configure as configure_artists
@@ -135,18 +135,24 @@ _INLINE_MAX = 30    # a hint longer than this sits behind a ? button instead of 
 
 
 class _HelpPopup(QFrame):
-    """The long explanation of a setting, in a small bubble that closes on the next click or on Esc."""
+    """The long explanation of a setting, in a small bubble. It is a child of the window the setting is in and not a
+    window of its own, so a click on a link in it is an ordinary click on every desktop (a popup window can lose it on
+    Wayland). A click anywhere else, Esc, or the setting going out of sight closes it."""
 
     def __init__(self, text: str, anchor: QWidget, links=()):
-        super().__init__(anchor.window(), Qt.Popup)
+        win = anchor.window()
+        super().__init__(win)
+        self._anchor = anchor
         self.setObjectName("settings_help")
         self.setFrameShape(QFrame.StyledPanel)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setAutoFillBackground(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         lbl = QLabel(plat_paths.breakable(text))
         lbl.setWordWrap(True)
         lbl.setTextFormat(Qt.PlainText)
-        lbl.setFixedWidth(300)
+        width = max(160, min(300, win.width() - 48))
+        lbl.setFixedWidth(width)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
@@ -157,22 +163,58 @@ class _HelpPopup(QFrame):
             a = QLabel(f'<a href="{url}"><span style="color:{link}">{label}</span></a>')
             a.setTextFormat(Qt.RichText)
             a.setWordWrap(True)
-            a.setFixedWidth(300)
+            a.setFixedWidth(width)
             a.setCursor(Qt.PointingHandCursor)
-            a.setToolTip(url)
+            a.setContextMenuPolicy(Qt.ActionsContextMenu)
+            copy = QAction("Copy link", a)
+            copy.triggered.connect(lambda _=False, u=url: QApplication.clipboard().setText(u))
+            a.addAction(copy)
             a.linkActivated.connect(self._go)
             lay.addWidget(a)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        self.setGraphicsEffect(shadow)
         self.adjustSize()
-        screen = anchor.screen().availableGeometry()
-        below = anchor.mapToGlobal(QPoint(0, anchor.height() + 4))
-        x = max(screen.left() + 4, min(below.x() - 12, screen.right() - self.width() - 4))
+
+    def _place(self):
+        win = self.parentWidget()
+        below = self._anchor.mapTo(win, QPoint(0, self._anchor.height() + 4))
+        x = max(6, min(below.x() - 12, win.width() - self.width() - 6))
         y = below.y()
-        if y + self.height() > screen.bottom():                    # no room under the button: above it
-            y = anchor.mapToGlobal(QPoint(0, 0)).y() - self.height() - 4
-        self.move(x, max(screen.top() + 4, y))
+        if y + self.height() > win.height() - 6:                      # no room under the button: above it
+            y = self._anchor.mapTo(win, QPoint(0, 0)).y() - self.height() - 4
+        self.move(x, max(6, y))
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._place()
+        self.raise_()
+        self.setFocus()
+        QApplication.instance().installEventFilter(self)
+        self._anchor.installEventFilter(self)
+
+    def closeEvent(self, e):
+        QApplication.instance().removeEventFilter(self)
+        super().closeEvent(e)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if obj is self._anchor and t in (QEvent.Hide, QEvent.Destroy):
+            self.close()
+        elif t == QEvent.MouseButtonPress and isinstance(obj, QWidget) and obj is not self and not self.isAncestorOf(obj):
+            self.close()
+            return obj is self._anchor              # the click that opened it must not open it again
+        elif t == QEvent.KeyPress and ev.key() == Qt.Key_Escape:
+            self.close()
+            return True
+        return False
 
     def _go(self, url: str):
-        QDesktopServices.openUrl(QUrl(url))
+        if not QDesktopServices.openUrl(QUrl(url)):
+            import webbrowser
+            webbrowser.open(url)
         self.close()
 
 
