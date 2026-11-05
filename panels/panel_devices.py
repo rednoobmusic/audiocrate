@@ -130,6 +130,7 @@ class DevicesWidget(QWidget):
     add_to_playlist = Signal(list)      # list[Path]
     play_now = Signal(list)             # list[Path]
     library_changed = Signal(object)    # a folder that gained files
+    play_disc = Signal(str)             # a video disc to play: the drive, e.g. /dev/sr0
     status = Signal(str, int)           # message, milliseconds
 
     def __init__(self, player, parent=None, monitor: DeviceMonitor | None = None):
@@ -774,6 +775,8 @@ class DevicesWidget(QWidget):
         if dev.kind == "iphone":
             where = "this folder" if scope[1] else "the phone's music folder"
             return "note", f"No music in {where}", "Voice memos and other files are under Folders.", ""
+        if self._video_disc(dev):
+            return "note", dev.name, "This disc has a film on it. The disc player shows it with its menus, titles and chapters.", "Play the disc"
         hint = "Drop songs on its card to put some on it." if not receive_problem(dev) else ""
         blank = dev.details.get("blank") or data.info.get("blank")
         return "note", ("This iPod has no songs yet" if dev.kind == "ipod" and blank
@@ -1012,6 +1015,8 @@ class DevicesWidget(QWidget):
         elif kind == "list":
             if self._search.text().strip():
                 self._search.clear()
+            elif self._video_disc(dev):
+                self.play_disc.emit(dev.block)
             else:
                 self._copy_to_menu()
 
@@ -1285,6 +1290,11 @@ class DevicesWidget(QWidget):
             roots.append(str(view.apps_root()) + "/")
         return sum(1 for t in getattr(self._player, "queue", []) if str(t.path).startswith(tuple(roots)))
 
+    @staticmethod
+    def _video_disc(dev) -> bool:
+        """Is a disc with a film on it in this drive: a DVD, a Blu-ray or a video CD."""
+        return dev.kind == "cd" and dev.mount is not None and any((Path(dev.mount) / x).is_dir() for x in ("VIDEO_TS", "BDMV", "MPEGAV"))
+
     def _eject(self, ident):
         dev = self._by_id(ident)
         if dev is None:
@@ -1342,6 +1352,8 @@ class DevicesWidget(QWidget):
         if dev.kind == "cd" and dev.details.get("media"):
             d = dev.details
             busy = bool(self._busy_text(dev.id))
+            if self._video_disc(dev):
+                menu.addAction("\U000f0381  Play the disc", lambda: self.play_disc.emit(dev.block)).setEnabled(not busy)
             if d.get("audio") and dev.mounted:
                 data = self._list.data
                 menu.addAction("\U000f05ee  Rip the CD to files\u2026", lambda: self._rip(data.items if data else [])).setEnabled(

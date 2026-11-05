@@ -109,6 +109,11 @@ class _Caption(QWidget):
         p.drawText(self.rect(), Qt.AlignCenter | Qt.TextWordWrap, self._text)
 
 
+def _is_video(track) -> bool:
+    """Is this track (of the player, or the disc the disc player has) a video?"""
+    return track is not None and (getattr(track, "is_video", False) or track.path.suffix.lower() in VIDEO_EXTS)
+
+
 class _Host(QWidget):
     """The window of the fullscreen stage. Closing it (Alt+F4) leaves fullscreen."""
 
@@ -150,6 +155,7 @@ class VideoStage(QWidget):
         self._home_index = 0
         self._menus = 0                 # menus open from here: the strip stays while there is one
         self._dbl = False
+        self.extra_menu = None          # a function that adds entries to the menu (the disc player's titles and chapters)
         self._dur = 0
         self._seeking = False
         self.setMinimumSize(160, 90)
@@ -167,7 +173,7 @@ class VideoStage(QWidget):
         self._osd_timer = QTimer(self, singleShot=True, interval=_OSD_MS)
         self._osd_timer.timeout.connect(self._osd_box.hide)
         self._click = QTimer(self, singleShot=True, interval=QApplication.doubleClickInterval())
-        self._click.timeout.connect(self._player.toggle)
+        self._click.timeout.connect(lambda: self._player.toggle())
 
         player.track_changed.connect(self._on_track)
         player.state_changed.connect(self._on_state)
@@ -189,8 +195,7 @@ class VideoStage(QWidget):
 
     @property
     def active(self) -> bool:
-        cur = self._player.current
-        return cur is not None and cur.path.suffix.lower() in VIDEO_EXTS
+        return _is_video(self._player.current)
 
     # ------------------------------------------------------------------ the strip
 
@@ -260,10 +265,24 @@ class VideoStage(QWidget):
         for w in (self._b_ab, self._b_speed, self._b_audio, self._b_subs, self._b_aspect, self._b_shot, self._b_more, self._b_full):
             row.addWidget(w)
         box.addLayout(row)
+        self._row = row
         # what goes first when the strip is narrow (it is all in the menu), first to go first
         self._optional = (self._b_shot, self._b_aspect, self._b_ab, self._b_speed, self._b_subs, self._b_audio, self._vol)
         self._always = (self._b_prev, self._b_play, self._b_next, self._b_mute, self._b_more, self._b_full)
         bar.hide()
+
+    def add_button(self, text: str, tip: str, slot, width: int = 0) -> QPushButton:
+        """A button of the owner of the stage (the disc player's menu, titles and chapters), left of the speed button."""
+        b = self._button(text, tip, slot)
+        b.setFixedWidth(width or max(34, b.fontMetrics().horizontalAdvance(text) + 18))
+        self._row.insertWidget(self._row.indexOf(self._b_ab), b)
+        self._always = self._always + (b,)
+        self._fit_bar()
+        return b
+
+    def notice(self, text: str):
+        """A line over the top left corner of the picture for a moment."""
+        self._osd(text)
 
     def _fit_bar(self):
         """Hide the buttons that do not fit, the less used first, and the audio track button when there is only one."""
@@ -349,7 +368,7 @@ class VideoStage(QWidget):
     # ------------------------------------------------------------------ the player's side
 
     def _on_track(self, track):
-        if track.path.suffix.lower() not in VIDEO_EXTS:
+        if not _is_video(track):
             self.set_fullscreen(False)
             self._bar.hide()
             self._set_sub_text("")
@@ -579,6 +598,9 @@ class VideoStage(QWidget):
         m.addAction("Previous frame\t,", lambda: self._player.frame_step(-1))
         m.addAction("Save a picture of this frame\tShift+S", self.screenshot)
         m.addAction("Media information...", self.show_info)
+        if self.extra_menu is not None:
+            m.addSeparator()
+            self.extra_menu(m)
         m.addSeparator()
         m.addAction("Leave fullscreen\tF" if self._fullscreen else "Fullscreen\tF", lambda: self.set_fullscreen(not self._fullscreen))
         return m

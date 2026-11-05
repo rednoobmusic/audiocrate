@@ -364,6 +364,7 @@ class MainWindow(QMainWindow):
         self._art_timer.timeout.connect(self._commit_art_palette)
         self._last_browse_dir = str(Path.home())
         self._convert_dlg = None
+        self._disc_win = None
         self._tour           = None    # the open tour dialog, see show_tour
         from concurrent.futures import ThreadPoolExecutor
         self._palette_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="palette")
@@ -653,6 +654,30 @@ class MainWindow(QMainWindow):
         if paths:
             self._last_browse_dir = str(Path(paths[0]).parent)
             self._convert([Path(p) for p in paths])
+
+    def _play_image(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Play a disc image", self._last_browse_dir,
+                                              "Disc images (*.iso *.img *.udf);;All files (*)")
+        if path:
+            self._last_browse_dir = str(Path(path).parent)
+            self._play_disc(path)
+
+    def _play_disc_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Play a DVD or Blu-ray folder", self._last_browse_dir)
+        if d:
+            self._last_browse_dir = d
+            self._play_disc(d)
+
+    def _play_disc(self, source: str):
+        """A disc in a drive (/dev/sr0), a disc image or the folder of a disc, in the disc player's own window."""
+        from disc_window import DiscWindow
+        from PySide6.QtWidgets import QMessageBox
+        if self._disc_win is None:
+            self._disc_win = DiscWindow()
+        self._player.pause()
+        why = self._disc_win.open(str(source))
+        if why:
+            QMessageBox.information(self, "Play a disc", why)
 
     def open_link(self, url: str, play: bool = True):
         """A web link from the window, the command line or the desktop: the Online panel plays it."""
@@ -954,6 +979,8 @@ class MainWindow(QMainWindow):
     def _on_player_state(self, playing: bool):
         if not playing and self._player.enhance and self._player.queue:
             self._show_status("Transcoding\u2026", 2500)
+        if playing and self._disc_win is not None:
+            self._disc_win.disc.pause()             # one thing plays at a time
 
     def _fetch_and_apply_palette(self, path):
         from art_color import _dominant, _derive_palette, _palette_cache, _cache_lock
@@ -1355,6 +1382,7 @@ class MainWindow(QMainWindow):
         self._devices.play_now.connect(self.open_files)
         self._devices.library_changed.connect(self._on_devices_saved)
         self._devices.status.connect(self._show_status)
+        self._devices.play_disc.connect(self._play_disc)
         self._devices.set_playlist_source(lambda: (self._playlist.source_name(), [t.path for t in self._player.queue]))
         self._playlist.send_to_device.connect(self._send_to_device)
         self._playlist.convert_requested.connect(self._convert)
@@ -1701,6 +1729,9 @@ class MainWindow(QMainWindow):
         fm.addAction("Add files…",  self._add_files)
         fm.addAction("Add folder…", self._add_folder)
         fm.addAction("Convert files…", self._convert_pick)
+        fm.addSeparator()
+        fm.addAction("Play a disc image…", self._play_image)
+        fm.addAction("Play a DVD or Blu-ray folder…", self._play_disc_folder)
         fm.addSeparator()
         fm.addAction("Quit", self.close)
 
@@ -2287,6 +2318,8 @@ class MainWindow(QMainWindow):
         try: self._devices.shutdown()
         except Exception: pass
         try:
+            if self._disc_win is not None and _qt_valid(self._disc_win):
+                self._disc_win.close()
             if self._convert_dlg is not None and _qt_valid(self._convert_dlg):
                 self._convert_dlg.shutdown()   # cancels a running conversion and keeps its settings
         except Exception: pass

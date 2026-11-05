@@ -28,6 +28,7 @@ class _VideoView(QWidget):
         self._mode = Qt.KeepAspectRatio
         self._ratio = None          # a width to height ratio to show the picture in, whatever its own is
         self._stale = False         # frames came while the widget was hidden and were not converted
+        self.native_ratio = None    # the shape a disc says its picture has, when the frames do not (anamorphic video)
         self.setAttribute(Qt.WA_OpaquePaintEvent)
         self.setMouseTracking(True)
 
@@ -50,6 +51,11 @@ class _VideoView(QWidget):
         img = frame.toImage() if frame.isValid() else self._image
         return None if img.isNull() else img
 
+    def show_image(self, img):
+        """A picture from a player that is not behind the sink (the disc player)."""
+        self._image = img
+        self.update()
+
     def _on_frame(self, frame):
         if not self.isVisible():
             self._stale = True      # nobody sees it: no conversion of the frame
@@ -67,7 +73,8 @@ class _VideoView(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), Qt.black)
         if not self._image.isNull():
-            src = QSize(int(self._ratio * 1000), 1000) if self._ratio else self._image.size()
+            ratio = self._ratio or self.native_ratio
+            src = QSize(int(ratio * 1000), 1000) if ratio else self._image.size()
             area = QRect(QPoint(0, 0), src.scaled(self.size(), self._mode))
             area.moveCenter(self.rect().center())
             p.setRenderHint(QPainter.SmoothPixmapTransform)

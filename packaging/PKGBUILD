@@ -17,7 +17,11 @@ optdepends=('libgme: VGM/VGZ chiptune playback'
             'deno: the JavaScript runtime yt-dlp needs for YouTube'
             'udisks2: mounting and ejecting drives in the Devices panel'
             'gvfs: audio CDs and iPhones in the Devices panel'
-            'libisoburn: writing music to blank discs'
+            'libisoburn: writing data discs and disc images, erasing discs'
+            'libburn: writing audio CDs (cdrskin)'
+            'libdiscid: finding the album of an audio CD when it is ripped'
+            'vlc: playing DVDs, Blu-ray discs and disc images'
+            'libdvdcss: playing DVDs with copy protection'
             'libgpod: writing the database of an iPod')
 options=('!strip')
 

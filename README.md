@@ -68,6 +68,24 @@ video plays with its own sound instead. Settings, Playback has a switch for this
 and a delay slider. Audio runs on its own thread, so UI activity does not
 interrupt the sound.
 
+A video has a strip of controls over the picture (seek, play, previous and next,
+volume, A-B repeat, speed, audio track, subtitles, aspect ratio, a picture of the
+frame, fullscreen) that shows when the pointer moves, the same things in a right
+click menu, and keys: F fullscreen, [ and ] speed, V subtitles, B audio track,
+A aspect ratio, G and H subtitle delay, Shift+S saves the frame, and . and ,
+step a frame. Subtitles come from the tracks inside the video and from SRT,
+WebVTT, ASS and SSA files, and a file next to the video with its name is picked
+up on its own.
+
+Discs play in a window of their own (File, Play a disc image or Play a DVD or
+Blu-ray folder, or Play the disc in the menu of a drive in Devices): DVD-Video
+with its menu, titles and chapters, Blu-ray without copy protection, video CDs,
+ISO images and the folders of a disc. The sound and the picture come from VLC's
+engine, which is loaded when VLC is installed and is not part of AudioCrate. In
+a menu the arrow keys, Enter and the Menu button steer it, Page up and Page down
+change the chapter, and the Titles and Chapters buttons list them. This is new and
+has only been tried with an ordinary video standing in for a disc.
+
 ### DSP chain
 
 The DSP panel (View, DSP) is a list of effects that you stack and reorder, as in
@@ -158,11 +176,17 @@ let other programs add to the Music app, so that direction is not offered.
 
 A CD or DVD drive is listed with a disc in it or without one, and its eject
 button opens the tray. An audio CD opens as one file per track, which you can
-play, add to the playlist or copy off as WAV files. A data disc is a read only
-volume. A blank CD-R or DVD+R can be written with Copy music, in a single session
-with xorriso, and because a disc can only be written once, AudioCrate asks first.
-The disc features are new and have so far been tried only with test data and a
-stand-in drive.
+play, add to the playlist or rip: Copy from asks for a folder and a format (FLAC,
+MP3, Opus, Ogg Vorbis, AAC, Apple Lossless or WAV, whatever the ffmpeg here can
+write) and names the files Artist/Album/NN - Title with tags. The album comes
+from MusicBrainz by the disc's ID, which is the one thing that leaves the
+computer, and needs libdiscid. A data disc is a read only volume. A blank CD-R or
+DVD+R can be written with Copy music, as a data disc in a single session with
+xorriso, or as an audio CD that plays in any CD player (80 minutes at most, with
+cdrskin), and because a disc can only be written once, AudioCrate asks first. The
+menu of a drive also writes a disc image (ISO) to a blank disc and erases a
+rewritable disc. The disc features are new and have so far been tried only with
+test data and a stand-in drive.
 
 The Folders view of a drive reads one folder at a time as you open it, so a big
 drive shows up at once and nothing is indexed. Songs, Albums and Artists read the
@@ -285,7 +309,9 @@ licence; they pull in `typing_extensions`, PSF-2.0). `requirements.txt` lists th
 For Online: `yt-dlp` and a JavaScript runtime (`deno`; yt-dlp also accepts `node` 22 or newer), and
 `gallery-dl` if you want X profiles. For Devices: `udisks2` with `busctl`, which comes with systemd (finding drives,
 mounting and eject), `libgpod` (iPod databases), `libimobiledevice` and `gvfs` (iPhone and iPad). `gvfs`
-also opens audio CDs, and `xorriso` writes blank discs.
+also opens audio CDs, `libdiscid` finds the album of a ripped CD, `xorriso` writes data discs and images and
+erases rewritable discs, `cdrskin` (the libburn package) writes audio CDs, and `libvlc` (VLC) plays DVDs and
+other discs, with `libdvdcss` for the ones that are copy protected.
 
 For exact SID song lengths, put an HVSC `Songlengths.md5` at
 `~/.config/audiocrate/Songlengths.md5` (also found automatically at
