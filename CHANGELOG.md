@@ -15,6 +15,9 @@
 - A video no longer has the audio rows of Now Playing (artist, album, seek line and times) under it. The strip over the picture has them, and the room goes to the picture. Now Playing comes to the front when a video starts.
 - The picture of a video is drawn by AudioCrate on every system now, as it was where QtMultimediaWidgets is missing. It costs more processor than Qt's own widget on a large video (about 44 percent of a core for 1080p at 30 frames a second in a test without a graphics card), and nothing is converted while the picture is out of sight.
 
+### Fixed
+- A change of album art colours froze the window for most of a second when the program that starts AudioCrate keeps an application-wide event filter of its own, as the rnm-os launcher does. Re-styling the panels sends about ten thousand events, and each one was a call into that program's Python code that had to win the interpreter lock back from the audio and decode threads. AudioCrate now asks such a program to step aside for the length of the restyle (it offers a hold_filter function), and the restyle takes about as long as it does without one.
+
 ## 1.7.2 (2026-10-31)
 
 ### Added

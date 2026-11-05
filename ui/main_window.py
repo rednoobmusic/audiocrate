@@ -1080,9 +1080,20 @@ class MainWindow(QMainWindow):
         that, not the styling, was most of a 100 ms stall."""
         app = QApplication.instance()
         app.removeEventFilter(self)
+        # A program that starts AudioCrate (the rnm-os launcher) may have an application-wide filter of its own, which costs
+        # the same: it offers hold_filter(), which takes it out and returns the function that puts it back.
+        hold = getattr(app, "hold_filter", None)
+        resume = None
+        if callable(hold):
+            try:
+                resume = hold()
+            except Exception:
+                resume = None
         try:
             yield
         finally:
+            if resume is not None:
+                resume()
             app.installEventFilter(self)
 
     def _set_app_qss(self, qss: str):
