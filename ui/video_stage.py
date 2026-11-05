@@ -173,7 +173,8 @@ class VideoStage(QWidget):
         self._osd_timer = QTimer(self, singleShot=True, interval=_OSD_MS)
         self._osd_timer.timeout.connect(self._osd_box.hide)
         self._click = QTimer(self, singleShot=True, interval=QApplication.doubleClickInterval())
-        self._click.timeout.connect(lambda: self._player.toggle())
+        self.on_click = None            # what a click on the picture does when it is not play and pause
+        self._click.timeout.connect(lambda: (self.on_click or self._player.toggle)())
 
         player.track_changed.connect(self._on_track)
         player.state_changed.connect(self._on_state)
@@ -279,6 +280,10 @@ class VideoStage(QWidget):
         self._always = self._always + (b,)
         self._fit_bar()
         return b
+
+    def refit(self):
+        """The buttons of the owner changed: show the ones that fit."""
+        self._fit_bar()
 
     def notice(self, text: str):
         """A line over the top left corner of the picture for a moment."""

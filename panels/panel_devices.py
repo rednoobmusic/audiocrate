@@ -1361,7 +1361,7 @@ class DevicesWidget(QWidget):
         if dev.kind == "cd" and dev.details.get("media"):
             d = dev.details
             busy = bool(self._busy_text(dev.id))
-            if self._video_disc(dev):
+            if d.get("usable") and not d.get("audio") and not d.get("blank"):      # a film is a data disc to the drive
                 menu.addAction("\U000f0381  Play the disc", lambda: self.play_disc.emit(dev.block)).setEnabled(not busy)
             if d.get("audio") and dev.mounted:
                 data = self._list.data

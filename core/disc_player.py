@@ -21,7 +21,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage
 
 NO_VLC = ("Playing discs needs VLC's engine. Install VLC (the libvlc package on Linux) and try again. "
-          "On Windows, VLC is installed in its usual folder.")
+          "On Windows, install VLC, or unpack its portable zip into a folder called vlc next to AudioCrate.exe.")
 DISC_EXTS = (".iso", ".img", ".udf")
 
 # libvlc_state_t
@@ -69,8 +69,12 @@ _lib = None
 
 def _candidates() -> list:
     if sys.platform == "win32":
-        roots = [os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramW6432")]
-        return [Path(r) / "VideoLAN" / "VLC" / "libvlc.dll" for r in roots if r]
+        # a vlc folder next to AudioCrate.exe (the portable zip of VLC unpacked there) first, then an installed VLC
+        here = Path(sys.executable).parent
+        dirs = [here / "vlc", here / "libs" / "vlc"]
+        dirs += [Path(r) / "VideoLAN" / "VLC" for r in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                                                       os.environ.get("ProgramW6432")) if r]
+        return [d / "libvlc.dll" for d in dirs]
     found = ctypes.util.find_library("vlc")
     return [found] if found else ["libvlc.so.5"]
 
@@ -257,7 +261,10 @@ class DiscPlayer(QObject):
         if self._queued > 1 or not w:       # the window has not kept up: this picture is dropped
             return
         self._queued += 1
-        self._from_vlc.emit(QImage(self._buf, w, h, w * 4, QImage.Format_RGB32).copy())
+        try:
+            self._from_vlc.emit(QImage(self._buf, w, h, w * 4, QImage.Format_RGB32).copy())
+        except RuntimeError:                # the player was deleted while libvlc was still drawing
+            pass
 
     # ------------------------------------------------------------------ the GUI thread
 
@@ -576,6 +583,16 @@ class DiscPlayer(QObject):
         """Is a menu of the disc on the screen? Its arrows, Enter and the menu key then steer the menu."""
         t = self.title_index
         return 0 <= t < len(self._titles) and self._titles[t][2]
+
+    def go_menu(self):
+        """To the menu of the disc: from a title by choosing the menu entry of the title list (libvlc's menu key does
+        nothing there on the discs tried), inside a menu by its menu key, which goes to the root menu."""
+        if self._mp is None:
+            return
+        if not self.in_menu and self._titles and self._titles[0][2]:
+            self.set_title(0)
+        else:
+            self.navigate("menu")
 
     def navigate(self, where: str):
         """Up, down, left, right, activate (the highlighted button) or menu (the menu of the disc)."""

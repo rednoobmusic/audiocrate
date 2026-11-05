@@ -82,9 +82,12 @@ Blu-ray folder, or Play the disc in the menu of a drive in Devices): DVD-Video
 with its menu, titles and chapters, Blu-ray without copy protection, video CDs,
 ISO images and the folders of a disc. The sound and the picture come from VLC's
 engine, which is loaded when VLC is installed and is not part of AudioCrate. In
-a menu the arrow keys, Enter and the Menu button steer it, Page up and Page down
-change the chapter, and the Titles and Chapters buttons list them. This is new and
-has only been tried with an ordinary video standing in for a disc.
+a menu the arrow keys, Enter and the Menu button steer it, and so do the arrow and
+OK buttons that show in the strip while a menu is up (VLC's engine cannot be handed
+a click on a menu button, so the pointer does not press them). Page up and Page
+down change the chapter, and the Titles and Chapters buttons list them, with the
+audio and subtitle tracks of the disc in their usual buttons. On Windows, VLC is
+found in its install folder or in a folder called vlc next to AudioCrate.exe.
 
 ### DSP chain
 
@@ -180,7 +183,9 @@ play, add to the playlist or rip: Copy from asks for a folder and a format (FLAC
 MP3, Opus, Ogg Vorbis, AAC, Apple Lossless or WAV, whatever the ffmpeg here can
 write) and names the files Artist/Album/NN - Title with tags. The album comes
 from MusicBrainz by the disc's ID, which is the one thing that leaves the
-computer, and needs libdiscid. A data disc is a read only volume. A blank CD-R or
+computer, and needs libdiscid. With cd-paranoia (libcdio-paranoia or cdparanoia)
+installed the tracks are read from the drive with error correction, otherwise from
+the track files the desktop shows for the disc. A data disc is a read only volume. A blank CD-R or
 DVD+R can be written with Copy music, as a data disc in a single session with
 xorriso, or as an audio CD that plays in any CD player (80 minutes at most, with
 cdrskin), and because a disc can only be written once, AudioCrate asks first. The
@@ -309,7 +314,7 @@ licence; they pull in `typing_extensions`, PSF-2.0). `requirements.txt` lists th
 For Online: `yt-dlp` and a JavaScript runtime (`deno`; yt-dlp also accepts `node` 22 or newer), and
 `gallery-dl` if you want X profiles. For Devices: `udisks2` with `busctl`, which comes with systemd (finding drives,
 mounting and eject), `libgpod` (iPod databases), `libimobiledevice` and `gvfs` (iPhone and iPad). `gvfs`
-also opens audio CDs, `libdiscid` finds the album of a ripped CD, `xorriso` writes data discs and images and
+also opens audio CDs, `libdiscid` finds the album of a ripped CD, `cd-paranoia` reads its tracks with error correction, `xorriso` writes data discs and images and
 erases rewritable discs, `cdrskin` (the libburn package) writes audio CDs, and `libvlc` (VLC) plays DVDs and
 other discs, with `libdvdcss` for the ones that are copy protected.
 

@@ -1413,9 +1413,9 @@ class DeviceMonitor(QObject):
     def _do_erase(self, job, dev):
         job.total_files, job.text = 1, "Erasing the disc"
         job.publish(True)
-        rc, tail = self._disc_proc(job, discs.erase_args(discs.xorriso(), dev.block), lambda line: None)
+        rc, said = self._quiet_proc(job, discs.erase_args(discs.xorriso(), dev.block), lambda: None)
         if rc != 0:
-            raise DeviceError("The disc could not be erased. %s" % discs.failure_line(tail))
+            raise DeviceError("The disc could not be erased. %s" % discs.failure_line(said.splitlines()))
         job.done_files = 1
         job.text = "The disc is erased."
 
@@ -1436,7 +1436,29 @@ class DeviceMonitor(QObject):
             return self._finished('rip', device_id, 'error', "Another job is running on this drive. Wait for it to finish first.")
         return self._start('rip', device_id, self._do_rip, dev, list(items), Path(dest_dir), fmt)
 
+    @staticmethod
+    def _quiet_proc(job, argv, tick) -> tuple[int, str]:
+        """Run a program that prints nothing useful and call tick() four times a second while it runs, stopping it when
+        the job is cancelled. Returns its exit code and what it printed."""
+        err = tempfile.TemporaryFile()
+        job.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=err, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            while job.proc.poll() is None:
+                if job.cancel.is_set():
+                    kill_group(job.proc)
+                    raise _Cancelled
+                tick()
+                time.sleep(0.25)
+            err.seek(0)
+            return job.proc.returncode, err.read()[-300:].decode('utf-8', 'replace').strip()
+        finally:
+            if job.proc is not None and job.proc.poll() is None:
+                kill_group(job.proc)
+            err.close()
+
     def _do_rip(self, job, dev, items, dest_dir, fmt_id):
+        """Rip the tracks one by one: each is read from the disc (by cd-paranoia, with error correction, when it is
+        installed and the drive can be read, else from the files the desktop shows for the disc), then encoded."""
         fmt = cv.format_by_id(fmt_id)
         if fmt is None:
             raise DeviceError("That format is not available here.")
@@ -1459,30 +1481,64 @@ class DeviceMonitor(QObject):
         count = (info or {}).get('tracks') or int(dev.details.get('tracks') or len(files))
         opts = cv.Options(format=fmt.id, template='{albumartist}/{album}/{track} - {title}', folder=str(dest_dir),
                           exists='skip', art=False)
-        jobs = [cv.ConvertJob(p, opts, discs.track_tags(n, count, album)) for n, p in files]
+        exe = discs.ripper() if dev.block and os.access(dev.block, os.R_OK) else None
+        work = Path(tempfile.mkdtemp(prefix='rip-', dir=self.cache_dir if self.cache_dir.is_dir() else None))
+        done = skipped = failed = 0
+        last = ''
+        try:
+            for k, (n, src) in enumerate(files):
+                if job.cancel.is_set():
+                    raise _Cancelled
+                job.done_files, job.sub = k, 0.0
+                job.text = "Ripping track %d of %d" % (k + 1, len(files))
+                job.publish(True)
+                wav = None
+                if exe:
+                    out = work / ('track%02d.wav' % n)
+                    want = max(src.stat().st_size, 1)
 
-        def update(j):
-            finished = sum(1 for x in jobs if x.finished)
-            job.done_files = finished
-            job.sub = (j.percent / 100.0) if not j.finished else 0.0
-            job.text = "Ripping track %d of %d" % (min(finished + 1, len(jobs)), len(jobs))
-            job.publish()
-        conv = cv.Converter(on_update=update, workers=1)       # one at a time: a drive reads one place at once
-        conv.start(jobs)
-        while not conv.wait(0.25):
-            if job.cancel.is_set():
-                conv.cancel()
-        if job.cancel.is_set():
-            raise _Cancelled
-        st = conv.stats
-        if st['failed'] and not st['done'] and not st['skipped']:
-            raise DeviceError(next((j.message for j in jobs if j.message and j.state == cv.FAILED), "The tracks could not be ripped."))
+                    def tick(out=out, want=want):
+                        try:
+                            job.sub = 0.8 * min(out.stat().st_size / want, 1.0)
+                        except OSError:
+                            pass
+                        job.publish()
+                    rc, said = self._quiet_proc(job, discs.rip_args(exe, dev.block, n, str(out)), tick)
+                    if rc == 0 and out.is_file() and out.stat().st_size > 44:
+                        wav = out
+                    else:
+                        log.warning("ripping track %d with %s failed (%s), reading it from the disc's files", n, exe, said)
+                        exe = None                  # the drive does not answer this way: the rest comes from the files
+                tags = discs.track_tags(n, count, album)
+                encoded = [cv.ConvertJob(wav or src, opts, tags)]
+
+                def update(j, k=k):
+                    job.done_files = k
+                    job.sub = (0.8 + 0.2 * j.percent / 100.0) if wav else j.percent / 100.0
+                    job.publish()
+                conv = cv.Converter(on_update=update, workers=1)
+                conv.start(encoded)
+                while not conv.wait(0.25):
+                    if job.cancel.is_set():
+                        conv.cancel()
+                if job.cancel.is_set():
+                    raise _Cancelled
+                st = conv.stats
+                done, skipped, failed = done + st['done'], skipped + st['skipped'], failed + st['failed']
+                if st['failed']:
+                    last = encoded[0].message or last
+                if wav is not None:
+                    wav.unlink(missing_ok=True)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if failed and not done and not skipped:
+            raise DeviceError(last or "The tracks could not be ripped.")
         job.done_files, job.sub = job.total_files, 0.0
-        text = "Ripped %d track%s to %s." % (st['done'], '' if st['done'] == 1 else 's', dest_dir)
-        if st['skipped']:
-            text += " %d were already there." % st['skipped']
-        if st['failed']:
-            text += " %d could not be ripped." % st['failed']
+        text = "Ripped %d track%s to %s." % (done, '' if done == 1 else 's', dest_dir)
+        if skipped:
+            text += " %d were already there." % skipped
+        if failed:
+            text += " %d could not be ripped." % failed
         job.text = text + ('' if album else " The album was not found, so the tracks are named by number.")
 
     @staticmethod

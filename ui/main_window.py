@@ -655,6 +655,25 @@ class MainWindow(QMainWindow):
             self._last_browse_dir = str(Path(paths[0]).parent)
             self._convert([Path(p) for p in paths])
 
+    def _fill_drives(self):
+        """The CD, DVD and Blu-ray drives of a Windows computer, as the entries of File, Play a disc in a drive."""
+        import ctypes
+        menu = self._drives_menu
+        menu.clear()
+        k32 = ctypes.windll.kernel32
+        mask = k32.GetLogicalDrives()
+        found = False
+        for i in range(26):
+            letter = chr(65 + i)
+            if mask & (1 << i) and k32.GetDriveTypeW(f"{letter}:\\") == 5:            # DRIVE_CDROM
+                label = ctypes.create_unicode_buffer(261)
+                has_disc = k32.GetVolumeInformationW(f"{letter}:\\", label, 261, None, None, None, None, 0)
+                text = f"{letter}:  {label.value}" if has_disc and label.value else f"{letter}:" + ("" if has_disc else "  (no disc)")
+                menu.addAction(text, lambda c=letter: self._play_disc(f"{c}:")).setEnabled(bool(has_disc))
+                found = True
+        if not found:
+            menu.addAction("No disc drive found").setEnabled(False)
+
     def _play_image(self):
         path, _ = QFileDialog.getOpenFileName(self, "Play a disc image", self._last_browse_dir,
                                               "Disc images (*.iso *.img *.udf);;All files (*)")
@@ -1732,6 +1751,9 @@ class MainWindow(QMainWindow):
         fm.addSeparator()
         fm.addAction("Play a disc image…", self._play_image)
         fm.addAction("Play a DVD or Blu-ray folder…", self._play_disc_folder)
+        if sys.platform == "win32":             # elsewhere the drive is in Devices
+            self._drives_menu = fm.addMenu("Play a disc in a drive")
+            self._drives_menu.aboutToShow.connect(self._fill_drives)
         fm.addSeparator()
         fm.addAction("Quit", self.close)
 

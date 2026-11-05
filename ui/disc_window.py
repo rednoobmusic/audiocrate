@@ -56,10 +56,20 @@ class DiscWindow(QWidget):
         stage.volume_nudged.connect(self._nudge_volume)
         stage.mute_toggled.connect(self._toggle_mute)
         stage.extra_menu = self._disc_menu
-        self._b_menu = stage.add_button("Menu", "The menu of the disc", lambda: disc.navigate("menu"))
+        stage.on_click = lambda: None if disc.in_menu else disc.toggle()      # a click cannot press a menu button, and a menu does not need a pause
+        self._b_menu = stage.add_button("Menu", "The menu of the disc", disc.go_menu)
         self._b_titles = stage.add_button("Titles", "Titles of the disc", lambda: stage._popup(self._titles_menu(), self._b_titles))
         self._b_chapters = stage.add_button("Chapters", "Chapters of this title",
                                             lambda: stage._popup(self._chapters_menu(), self._b_chapters))
+        # a menu of the disc can be steered with the buttons, as with the arrow keys and Enter (libvlc has no way to
+        # hand it a click on the picture)
+        self._pad = [stage.add_button(text, tip, lambda _=False, w=where: disc.navigate(w), 30)
+                     for text, tip, where in (("\u25b2", "Up in the menu", "up"), ("\u25bc", "Down in the menu", "down"),
+                                              ("\u25c0", "Left in the menu", "left"), ("\u25b6", "Right in the menu", "right"),
+                                              ("OK", "Choose the highlighted button", "activate"))]
+        for b in self._pad:
+            b.hide()
+        disc.disc_changed.connect(self._sync_pad)
         QApplication.instance().installEventFilter(self)
 
     # ------------------------------------------------------------------ opening and closing
@@ -84,6 +94,14 @@ class DiscWindow(QWidget):
         self.closed.emit()
         super().closeEvent(e)
 
+    def _sync_pad(self):
+        menu = self.disc.in_menu
+        for b in self._pad:
+            b.setVisible(menu)
+        self.stage.refit()
+        if menu:
+            self.stage.poke()
+
     def _on_ended(self):
         if not self._shown:
             QMessageBox.information(self, "Play a disc", "Nothing came out of this disc. A disc with copy protection needs libdvdcss "
@@ -102,18 +120,19 @@ class DiscWindow(QWidget):
             m.addAction("This disc lists no titles").setEnabled(False)
         for i, (name, secs, menu) in enumerate(titles):
             label = "Menu" if menu and not name else (name or f"Title {i}")
-            a = m.addAction(label + (f"   {_clock(secs)}" if secs else ""), lambda i=i: self.disc.set_title(i))
+            a = m.addAction(label + (f"   {_clock(secs)}" if secs else ""), lambda _=False, i=i: self.disc.set_title(i))
             a.setCheckable(True)
             a.setChecked(i == cur)
         return m
 
     def _chapters_menu(self, parent=None) -> QMenu:
-        m = QMenu("Chapters", parent or self)
+        menu = self.disc.in_menu
+        m = QMenu("Disc menus" if menu else "Chapters", parent or self)       # a menu's "chapters" are the other menus
         chapters, cur = self.disc.chapters(), self.disc.chapter_index
         if not chapters:
             m.addAction("This title has no chapters").setEnabled(False)
         for i, (name, secs) in enumerate(chapters):
-            a = m.addAction(f"{name}   {_clock(secs)}", lambda i=i: self.disc.set_chapter(i))
+            a = m.addAction(name if menu else f"{name}   {_clock(secs)}", lambda _=False, i=i: self.disc.set_chapter(i))
             a.setCheckable(True)
             a.setChecked(i == cur)
         return m
@@ -121,19 +140,22 @@ class DiscWindow(QWidget):
     def _disc_menu(self, menu: QMenu):
         d = self.disc
         sub = menu.addMenu("Disc")
-        sub.addAction("Go to the menu of the disc", lambda: d.navigate("menu"))
+        sub.addAction("Go to the menu of the disc", d.go_menu)
         sub.addMenu(self._titles_menu(sub))
         sub.addMenu(self._chapters_menu(sub))
         sub.addSeparator()
         for text, where in (("Up", "up"), ("Down", "down"), ("Left", "left"), ("Right", "right"), ("Select", "activate")):
             sub.addAction(text + "\t" + {"up": "Up", "down": "Down", "left": "Left", "right": "Right", "activate": "Enter"}[where]
-                          + " in a menu", lambda w=where: d.navigate(w))
+                          + " in a menu", lambda _=False, w=where: d.navigate(w))
         menu.addAction("Next chapter\tPage down", d.next)
         menu.addAction("Previous chapter\tPage up", d.prev)
 
     # ------------------------------------------------------------------ keys and volume
 
     def _nudge_volume(self, step: int):
+        if self.disc.in_menu:                       # the wheel and the up and down keys move through a menu
+            self.disc.navigate("up" if step > 0 else "down")
+            return
         self.disc.volume = _slider_to_vol(_vol_to_slider(self.disc.volume) + step)
 
     def _toggle_mute(self):
@@ -174,4 +196,4 @@ class DiscWindow(QWidget):
         elif k in (K.Key_M, K.Key_VolumeMute):
             self._toggle_mute()
         elif k == K.Key_Menu or k == K.Key_T:
-            d.navigate("menu")
+            d.go_menu()

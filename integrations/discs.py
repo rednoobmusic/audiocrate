@@ -51,6 +51,16 @@ def audio_room(free_bytes: int) -> float:
     return free_bytes / 2048 * 2352 / PCM_PER_SECOND
 
 
+def ripper() -> str | None:
+    """cd-paranoia (libcdio) or cdparanoia, which read the sectors of an audio CD with error correction, or None."""
+    return shutil.which('cd-paranoia') or shutil.which('cdparanoia')
+
+
+def rip_args(exe: str, node: str, track: int, out: str) -> list[str]:
+    """Read one track of the audio CD in `node` into a WAV file."""
+    return [exe, '-q', '-d', node, '-w', str(track), out]
+
+
 # commands
 
 def erase_args(exe: str, node: str) -> list[str]:
