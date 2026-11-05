@@ -156,8 +156,8 @@ def sniff_image(path: Path) -> str:
 
 
 def mrl_for(source: str) -> tuple[str, str]:
-    """(the address libvlc plays, '') for a drive (/dev/sr0), a disc image, or the folder of a disc; ('', why) when it
-    is none of those."""
+    """The address libvlc plays for a drive (/dev/sr0), a disc image or the folder of a disc, as (address, ''). When
+    it is none of those the address is empty and the second part says why."""
     p = Path(source)
     if str(source).startswith("/dev/") or (sys.platform == "win32" and len(str(source)) <= 3 and str(source)[1:2] == ":"):
         return "dvd://" + str(source), ""
