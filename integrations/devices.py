@@ -1302,6 +1302,69 @@ class DeviceMonitor(QObject):
         job.sub, job.done_files = 0.0, job.total_files
         job.text = "Done. Close the tray to play the disc."
 
+    def save_image(self, device_id: str, dest: Path) -> str:
+        """Copy the disc in a drive into an image file (an ISO), sector for sector. Parts that cannot be read are
+        left as zeros and counted."""
+        dev, dest = self._find(device_id), Path(dest)
+        if dev is None or dev.kind != 'cd':
+            return self._finished('image', device_id, 'error', _GONE)
+        d = dev.details
+        why = ("There is no disc in the drive." if not d.get('media') else
+               "A blank disc has nothing to copy." if d.get('blank') else
+               "An audio CD is ripped to files, not copied as an image." if d.get('audio') else
+               "Another job is running on this drive. Wait for it to finish first." if self._busy.get(device_id) else '')
+        if why:
+            return self._finished('image', device_id, 'error', why)
+        return self._start('image', device_id, self._do_save_image, dev, dest)
+
+    def _do_save_image(self, job, dev, dest):
+        size = int(dev.capacity or 0)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if size and shutil.disk_usage(dest.parent).free < size + (16 << 20):
+            raise DeviceError("There is not enough room in that folder: %d MB needed." % (size >> 20))
+        part = dest.with_name('.' + dest.name + '.part')
+        job.total_files, job.text = 1, "Copying the disc to %s" % dest.name
+        job.publish(True)
+        bad = done = 0
+        step, piece = 1 << 20, 32 * 2048
+        try:
+            with open(dev.block, 'rb', buffering=0) as src, open(part, 'wb') as out:
+                while True:
+                    if job.cancel.is_set():
+                        raise _Cancelled
+                    try:
+                        chunk = src.read(step)
+                    except OSError:
+                        chunk = b''                     # a scratch: read it again in small pieces, zeros for what fails
+                        for _ in range(step // piece):
+                            try:
+                                src.seek(done + len(chunk))
+                                got = src.read(piece)
+                            except OSError:
+                                got, bad = b'\0' * piece, bad + 1
+                            if not got:
+                                break
+                            chunk += got
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    done += len(chunk)
+                    job.bytes = done
+                    if size:
+                        job.sub = min(done / size, 1.0)
+                    job.publish()
+            plat_fs.replace(part, dest)
+        except OSError as e:
+            raise DeviceError(_os_message(e))
+        finally:
+            try:
+                part.unlink(missing_ok=True)
+            except OSError:
+                pass
+        job.sub, job.done_files = 0.0, 1
+        job.text = "Saved %s (%d MB)." % (dest.name, done >> 20) + (
+            " %d part%s could not be read and %s zeros." % (bad, '' if bad == 1 else 's', 'is' if bad == 1 else 'are') if bad else '')
+
     def burn_image(self, device_id: str, image: Path) -> str:
         """Write a disc image (an ISO) to the blank disc as the whole disc."""
         dev, image = self._find(device_id), Path(image)

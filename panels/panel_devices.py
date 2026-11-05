@@ -43,6 +43,7 @@ VERBS = {"copy_to": ("Copying to", "Copied to", "Could not copy to", "Stopped co
          "burn": ("Writing to", "Wrote to", "Could not write to", "Stopped writing to"),
          "rip": ("Ripping", "Ripped", "Could not rip", "Stopped ripping"),
          "erase": ("Erasing", "Erased", "Could not erase", "Stopped erasing"),
+         "image": ("Copying", "Copied", "Could not copy", "Stopped copying"),
          "close_tray": ("Closing the tray of", "Closed the tray of", "Could not close the tray of", "Stopped closing the tray of"),
          "restore": ("Restoring", "Restored", "Could not restore", "Stopped restoring")}
 KEEP = {"copy_to": 20, "copy_from": 20, "rip": 20, "eject": 12}        # seconds a finished job stays in the strip
@@ -1269,6 +1270,14 @@ class DevicesWidget(QWidget):
         self._confirm.ask(f"Erase {dev.name}? Everything on the disc is lost and cannot be brought back.", "Erase")
         self._chrome()
 
+    def _save_image(self, dev):
+        path, _ = QFileDialog.getSaveFileName(self, f"Save {dev.name} as an image",
+                                              str(self._dest / (dev.name.replace("/", "-") + ".iso")),
+                                              "Disc images (*.iso);;All files (*)")
+        if path:
+            self._dest = Path(path).parent
+            self._mon.save_image(dev.id, Path(path))
+
     def _burn_image(self, dev):
         path, _ = QFileDialog.getOpenFileName(self, f"Write a disc image to {dev.name}", str(self._dest),
                                               "Disc images (*.iso *.img *.udf);;All files (*)")
@@ -1358,6 +1367,8 @@ class DevicesWidget(QWidget):
                 data = self._list.data
                 menu.addAction("\U000f05ee  Rip the CD to files\u2026", lambda: self._rip(data.items if data else [])).setEnabled(
                     not busy and bool(data and data.items))
+            if d.get("usable") and not d.get("audio") and not d.get("blank"):
+                menu.addAction("\U000f05ee  Save the disc as an image\u2026", lambda: self._save_image(dev)).setEnabled(not busy)
             if d.get("blank") and d.get("writable"):
                 menu.addAction("\U000f0238  Write a disc image\u2026", lambda: self._burn_image(dev)).setEnabled(not busy)
             if d.get("rewritable"):
