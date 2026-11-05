@@ -722,6 +722,7 @@ class VideoAudio(QObject):
     speed, the audio track and the video sound delay are followed while the video plays."""
     fell_back = Signal(str)
     active_changed = Signal(bool)       # our sink took the sound over, or the player's own output has it again
+    subtitle_text = Signal(str)         # the line a subtitle track inside the video shows now, "" for none
     _w_begin = Signal()
     _w_halt = Signal(int)
     _w_flush = Signal()
@@ -759,6 +760,7 @@ class VideoAudio(QObject):
         self._widget = None
         self._vo = None
         self._pic = None
+        self._sub_sink = None
         self._watch = QTimer(self)
         self._watch.setInterval(500)
         self._watch.timeout.connect(self._look)
@@ -980,6 +982,21 @@ class VideoAudio(QObject):
                 self.media.setVideoOutput(want)
             except Exception:
                 log.exception("video sound: the picture output could not be changed")
+            self._follow_subtitles(want)
+
+    def _follow_subtitles(self, output):
+        """The media player hands the text of a subtitle track to the sink of its output."""
+        sink = output if isinstance(output, QVideoSink) else getattr(output, "videoSink", lambda: None)()
+        if sink is self._sub_sink:
+            return
+        if self._sub_sink is not None:
+            try:
+                self._sub_sink.subtitleTextChanged.disconnect(self.subtitle_text)
+            except (RuntimeError, TypeError):
+                pass
+        self._sub_sink = sink
+        if sink is not None:
+            sink.subtitleTextChanged.connect(self.subtitle_text)
 
     def lag_ms(self):
         """How far behind the picture clock our sound is heard, in ms as measured (the sound card's own delay is not

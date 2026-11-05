@@ -387,6 +387,10 @@ class Player(QObject):
     error              = Signal(str)                   # user-visible playback problem (shown in status bar)
     ab_changed         = Signal()                      # the A-B loop was set, completed or cleared
     video_sound_changed = Signal(bool)                 # True: the sound of the video plays through our sink (the scope can read it)
+    video_tracks_changed = Signal()                    # the audio or subtitle tracks of the loaded video changed
+    subtitle_text       = Signal(str)                  # the line a subtitle track inside the video shows now
+    rate_changed        = Signal(float)                # the playback speed of the video changed
+    volume_changed      = Signal(float)                # the volume was set (0 to 1)
     _chip_done         = Signal(int, object)           # (generation, wav or None), internal, worker to main thread
     _tags_filled       = Signal()                      # queue tags arrived from the background reader
 
@@ -468,6 +472,9 @@ class Player(QObject):
         self._vaudio = VideoAudio(self._media, self._out, self._dsp, parent=self)
         self._vaudio.active_changed.connect(self.video_sound_changed)
         self._vaudio.fell_back.connect(self._on_video_fell_back)
+        self._vaudio.subtitle_text.connect(self.subtitle_text)
+        self._media.tracksChanged.connect(self.video_tracks_changed)
+        self._media.playbackRateChanged.connect(self.rate_changed)
 
         self._ab_a: int | None = None        # A-B loop points in ms, see ab_toggle
         self._ab_b: int | None = None
@@ -683,14 +690,16 @@ class Player(QObject):
         """Settings: video sound delay in ms, -200 to 200. Positive plays our sound later, negative holds the picture back."""
         self._vaudio.set_delay_ms(ms)
 
-    def audio_tracks(self) -> list[str]:
-        """Names of the audio tracks of the video that is loaded, [] when it has one or none."""
+    @staticmethod
+    def _track_name(md, i: int) -> str:
         from PySide6.QtMultimedia import QMediaMetaData
         K = QMediaMetaData.Key
-        out = []
-        for i, md in enumerate(self._media.audioTracks()):
-            name = md.stringValue(K.Title) or md.stringValue(K.Language)
-            out.append(name if name and name != "Unspecified" else f"Track {i + 1}")
+        name = md.stringValue(K.Title) or md.stringValue(K.Language)
+        return name if name and name != "Unspecified" else f"Track {i + 1}"
+
+    def audio_tracks(self) -> list[str]:
+        """Names of the audio tracks of the video that is loaded, [] when it has one or none."""
+        out = [self._track_name(md, i) for i, md in enumerate(self._media.audioTracks())]
         return out if len(out) > 1 else []
 
     @property
@@ -701,6 +710,60 @@ class Player(QObject):
         """Switch the sound of the video to another of its audio tracks, keeping the picture running."""
         self._media.setActiveAudioTrack(int(i))
         self._vaudio.track_changed()     # QMediaPlayer does not say so itself
+
+    def subtitle_tracks(self) -> list[str]:
+        """Names of the subtitle tracks inside the video that is loaded."""
+        return [self._track_name(md, i) for i, md in enumerate(self._media.subtitleTracks())]
+
+    @property
+    def subtitle_track(self) -> int:
+        return self._media.activeSubtitleTrack()        # -1 for none
+
+    def set_subtitle_track(self, i: int):
+        self._media.setActiveSubtitleTrack(int(i))
+
+    @property
+    def playback_rate(self) -> float:
+        return self._media.playbackRate()
+
+    def set_playback_rate(self, rate: float):
+        """The speed of the video. Its sound follows (the pitch with it, see video_audio.py)."""
+        from video_audio import PLAY_MAX, PLAY_MIN
+        self._media.setPlaybackRate(max(PLAY_MIN, min(PLAY_MAX, float(rate))))
+
+    def frame_step(self, direction: int):
+        """One frame on or back, with the video paused. The step is the frame time the file reports, 25 fps if it says none."""
+        from PySide6.QtMultimedia import QMediaMetaData
+        dur = self.duration_ms
+        if dur <= 0:
+            return
+        if self.is_playing:
+            self.toggle()
+        fps = self._media.metaData().value(QMediaMetaData.Key.VideoFrameRate) or 25.0
+        self.seek(max(0, min(dur, self._media.position() + int(round(direction * 1000.0 / fps)))) / dur)
+
+    def video_info(self) -> list[tuple[str, str]]:
+        """What the media player knows about the loaded video, as (label, text)."""
+        from PySide6.QtMultimedia import QMediaMetaData
+        K = QMediaMetaData.Key
+        md = self._media.metaData()
+        out = []
+        for label, key in (("Title", K.Title), ("Container", K.FileFormat), ("Video codec", K.VideoCodec),
+                           ("Resolution", K.Resolution), ("Frame rate", K.VideoFrameRate), ("Video bit rate", K.VideoBitRate),
+                           ("Audio codec", K.AudioCodec), ("Audio bit rate", K.AudioBitRate)):
+            v = md.value(key)
+            if v in (None, "", 0):
+                continue
+            if key == K.Resolution:
+                text = f"{v.width()} x {v.height()}"
+            elif key == K.VideoFrameRate:
+                text = f"{float(v):.3f}".rstrip("0").rstrip(".") + " fps"
+            elif key in (K.VideoBitRate, K.AudioBitRate):
+                text = f"{int(v) // 1000} kb/s"
+            else:
+                text = md.stringValue(key)
+            out.append((label, text))
+        return out
 
     @staticmethod
     def audio_devices() -> list[QAudioDevice]:
@@ -1013,6 +1076,7 @@ class Player(QObject):
             self._media.setLoops(
                 QMediaPlayer.Infinite if self._mode == PlayMode.REPEAT_ONE else 1
             )
+            self._media.setPlaybackRate(1.0)
             self._vaudio.start()
             src = STREAMS.get(t.path)
             self._media.setSource(QUrl(src["url"]) if src else QUrl.fromLocalFile(str(t.path)))
@@ -1654,6 +1718,7 @@ class Player(QObject):
     @volume.setter
     def volume(self, val: float):
         self._base_vol = max(0.0, min(1.0, val))
+        self.volume_changed.emit(self._base_vol)
         self._set_out_volume(self._base_vol)
         self._vgm.volume = self._base_vol
         self._dsp.volume = self._base_vol

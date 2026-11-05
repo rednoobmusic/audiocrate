@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePo
 from PySide6.QtCore    import Qt, Signal, QTimer, QPointF
 from PySide6.QtGui     import (QPixmap, QPainter, QPainterPath, QColor, QMouseEvent,
                                QRadialGradient, QTransform)
-from video_view import make_video_widget
+from video_stage import VideoStage
 
 from player import Player, decode_art, extract_art, VIDEO_EXTS
 from steady_label import SteadyLabel
@@ -386,14 +386,12 @@ class NowPlayingWidget(QWidget):
         root.setSpacing(8)
 
         self._art = _ArtLabel()
-        self._np_video = make_video_widget()
-        self._np_video.setAspectRatioMode(Qt.KeepAspectRatio)
-        self._np_video.setStyleSheet("background: black;")
-        self._np_video.hide()
+        self.stage = VideoStage(self._player)
+        self._seekbar_wanted = True
 
         self._media_stack = QStackedWidget()
         self._media_stack.addWidget(self._art)       # index 0
-        self._media_stack.addWidget(self._np_video)  # index 1
+        self._media_stack.addWidget(self.stage)      # index 1
         root.addWidget(self._media_stack, 1)
 
         info = QVBoxLayout()
@@ -444,25 +442,34 @@ class NowPlayingWidget(QWidget):
 
     def _ctx_menu(self, pos):
         m = QMenu(self)
-        visible = self._seek.isVisible()
+        visible = self._seekbar_wanted
         a = m.addAction("Hide seekbar" if visible else "Show seekbar")
         a.triggered.connect(lambda: self._set_seekbar_visible(not visible))
         m.exec(self.mapToGlobal(pos))
 
     def _set_seekbar_visible(self, visible: bool):
-        self._seek.setVisible(visible)
-        self._time_row_widget.setVisible(visible)
+        self._seekbar_wanted = visible
+        self._show_rows(self._media_stack.currentWidget() is self.stage)
+
+    def _show_rows(self, video: bool):
+        """A video has its own seek line and times in the strip over the picture, and the room goes to the picture."""
+        self._seek.setVisible(self._seekbar_wanted and not video)
+        self._time_row_widget.setVisible(self._seekbar_wanted and not video)
+        self._artist.setVisible(not video)
+        self._album.setVisible(not video)
 
     @property
     def video_widget(self) -> QWidget:
-        return self._np_video
+        return self.stage.video_widget
 
     def _on_track(self, track):
         anim.set_text(self._title, track.title or track.path.stem)
         anim.set_text(self._artist, track.artist)
         anim.set_text(self._album, track.album)
         is_video = track.path.suffix.lower() in VIDEO_EXTS
-        self._media_stack.setCurrentIndex(1 if is_video else 0)
+        if self._media_stack.count() > 1:          # the video is not here while it is fullscreen
+            self._media_stack.setCurrentIndex(1 if is_video else 0)
+        self._show_rows(is_video)
         if not is_video:
             anim.hold(self._art, self._art.look())
             self._art.set_pixmap(None)

@@ -527,6 +527,8 @@ class MainWindow(QMainWindow):
                            QAbstractSpinBox, QComboBox)):
             return False   # user is typing
 
+        if self._np_widget.stage.handle_key(event):
+            return True
         k    = event.key()
         ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
 
@@ -842,6 +844,8 @@ class MainWindow(QMainWindow):
             # while our sink plays it; otherwise it is decoded for the analyzer while a visualizer is shown (RAM gating).
             self._analyzer.set_live(False)
             self._video_analyzer_source()
+            self._np_dock.show()                               # the picture is in Now Playing, which may be a tab behind
+            self._np_dock.raise_()
         else:
             # Plain audio: scope/spectrum read the engine's decode directly, so there
             # is no second decode (no RAM, no track-change lag).
@@ -1419,6 +1423,10 @@ class MainWindow(QMainWindow):
 
         self._np_widget = NowPlayingWidget(self._player)
         self._player.set_video_output(self._np_widget.video_widget)
+        stage = self._np_widget.stage
+        stage.volume_nudged.connect(self._nudge_volume)
+        stage.volume_set.connect(self._controls._vol.setValue)
+        stage.mute_toggled.connect(self._toggle_mute)
         np_dock = self._np_dock = _make_dock("Now Playing", self._np_widget, Qt.LeftDockWidgetArea)
         self.tabifyDockWidget(lib_dock, np_dock)
         lib_dock.raise_()

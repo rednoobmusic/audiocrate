@@ -3,7 +3,14 @@
 ## 1.7.2 (2026-10-31)
 
 ### Added
+- Videos have controls over the picture. A strip with the seek line, play, previous and next, mute and volume, A-B repeat, speed, audio track, subtitles, aspect ratio, a picture of the frame, a menu and fullscreen shows when the pointer moves and goes away while the video plays. A click pauses, a double click is fullscreen, the wheel changes the volume, and the right mouse button opens a menu with all of it. Keys: F fullscreen, [ and ] change the speed (from 0.25 to 4 times), = sets it back, V next subtitles, B next audio track, A next aspect ratio, G and H move subtitles sooner or later, Shift+S saves the frame as a PNG in Pictures/AudioCrate, and . and , step a frame while paused.
+- Subtitles: the tracks inside a video, and SRT, WebVTT, ASS and SSA files. A file beside the video that starts with its name (movie.srt, movie.en.srt) is used at once, and any other can be loaded from the menu.
+- Aspect ratio of a video: fit, fill, stretch, 16:9, 4:3, 21:9, 16:10 and 1:1. Media information in the menu shows the codecs, resolution, frame rate and bit rates.
 - A click on a line of synced lyrics jumps to that part of the song. The pointer turns into a hand over lyrics that are synced, and the highlight moves at once, also while the song is paused.
+
+### Changed
+- A video no longer has the audio rows of Now Playing (artist, album, seek line and times) under it. The strip over the picture has them, and the room goes to the picture. Now Playing comes to the front when a video starts.
+- The picture of a video is drawn by AudioCrate on every system now, as it was where QtMultimediaWidgets is missing. It costs more processor than Qt's own widget on a large video (about 44 percent of a core for 1080p at 30 frames a second in a test without a graphics card), and nothing is converted while the picture is out of sight.
 
 ### Fixed
 - Synced lyrics whose first line is stamped 0:00 (often a title line) were shown as plain text, without the highlight and the scrolling. They follow the song now like any other synced lyrics.
