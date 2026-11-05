@@ -1,6 +1,6 @@
 # AudioCrate changelog
 
-## Unreleased
+## 1.8.0 (2026-11-04)
 
 ### Added
 - Videos have controls over the picture. A strip with the seek line, play, previous and next, mute and volume, A-B repeat, speed, audio track, subtitles, aspect ratio, a picture of the frame, a menu and fullscreen shows when the pointer moves and goes away while the video plays. A click pauses, a double click is fullscreen, the wheel changes the volume, and the right mouse button opens a menu with all of it. Keys: F fullscreen, [ and ] change the speed (from 0.25 to 4 times), = sets it back, V next subtitles, B next audio track, A next aspect ratio, G and H move subtitles sooner or later, Shift+S saves the frame as a PNG in Pictures/AudioCrate, and . and , step a frame while paused.
