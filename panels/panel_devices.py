@@ -41,9 +41,11 @@ VERBS = {"copy_to": ("Copying to", "Copied to", "Could not copy to", "Stopped co
          "unmount": ("Unmounting", "Unmounted", "Could not unmount", "Stopped unmounting"),
          "eject": ("Ejecting", "Ejected", "Could not eject", "Stopped ejecting"),
          "burn": ("Writing to", "Wrote to", "Could not write to", "Stopped writing to"),
+         "rip": ("Ripping", "Ripped", "Could not rip", "Stopped ripping"),
+         "erase": ("Erasing", "Erased", "Could not erase", "Stopped erasing"),
          "close_tray": ("Closing the tray of", "Closed the tray of", "Could not close the tray of", "Stopped closing the tray of"),
          "restore": ("Restoring", "Restored", "Could not restore", "Stopped restoring")}
-KEEP = {"copy_to": 20, "copy_from": 20, "eject": 12}        # seconds a finished job stays in the strip
+KEEP = {"copy_to": 20, "copy_from": 20, "rip": 20, "eject": 12}        # seconds a finished job stays in the strip
 PHONE_TITLES = {"unpaired": "{} does not trust this computer yet", "waiting": "Tap Trust on the {}",
                 "locked": "The {} is locked", "denied": "Trust was declined", "failed": "Pairing did not work",
                 "no_device": "The {} is not connected"}
@@ -157,6 +159,7 @@ class DevicesWidget(QWidget):
         self._ask: dict | None = None
         self._source = None
         self._dest = plat_paths.music_dir()
+        self._rip_format = "flac"
         self._started = self._active = self._ready = False
         self._ticks = 0
         self._quiet_until = time.monotonic() + 3
@@ -1150,8 +1153,9 @@ class DevicesWidget(QWidget):
         songs, d = plural(n, "song"), dev.details
         library = dev.kind == "ipod" and d.get("can_write") and not d.get("rockbox")
         if dev.kind == "cd":
-            text = (f"Write {songs} to the disc? A disc can be written only once, and stopping part way spoils it. "
-                    "The songs go into a Music folder.")
+            text = (f"Write {songs} to the disc? A disc can be written only once, and stopping part way spoils it. " +
+                    ("Choose Data disc to keep the files in a Music folder, or Audio CD to play it in any CD player."
+                     if len(self._mon.profiles(dev.id)) > 1 else "The songs go into a Music folder."))
         elif not dev.mounted:
             text = f"{dev.name} is not mounted. Mount it and copy {songs}?"
         elif library:
@@ -1191,6 +1195,14 @@ class DevicesWidget(QWidget):
                 self._mon.mount(dev.id)
             else:
                 self._start_copy(dev, ask["paths"], profile, ask["playlist"])
+        elif ask["kind"] == "rip":
+            self._rip_format = self._confirm.value("profile") or "flac"
+            jid = self._mon.rip(ask["device"], ask["items"], ask["dest"], self._rip_format)
+            self._ctx[jid] = {"dest": ask["dest"]}
+        elif ask["kind"] == "erase":
+            self._mon.erase(ask["device"])
+        elif ask["kind"] == "image":
+            self._mon.burn_image(ask["device"], ask["image"])
         elif ask["kind"] == "eject":
             self._mon.eject(ask["device"])
         elif ask["kind"] == "restore":
@@ -1214,12 +1226,53 @@ class DevicesWidget(QWidget):
         if not ids:
             self.status.emit("There are no songs to copy.", 4000)
             return
+        if dev.kind == "cd" and dev.details.get("audio"):
+            self._rip([data.items[i] for i in ids])
+            return
         d = QFileDialog.getExistingDirectory(self, f"Copy {plural(len(ids), 'song')} from {dev.name} to",
                                              str(self._dest))
         if d:
             self._dest = Path(d)
             jid = self._mon.copy_from(dev.id, [data.items[i] for i in ids], Path(d))
             self._ctx[jid] = {"dest": Path(d)}
+
+    def _rip(self, items: list):
+        """Ask where the tracks of the audio CD go, then which format, then rip."""
+        dev = self._cur()
+        d = QFileDialog.getExistingDirectory(self, f"Rip {plural(len(items), 'track')} from {dev.name} to", str(self._dest))
+        if not d:
+            return
+        self._dest = Path(d)
+        self._token = token = object()
+        self._bg.run(self._mon.rip_formats, partial(self._rip_formats, token, dev.id, items, Path(d)))
+
+    def _rip_formats(self, token, ident, items, dest, formats, err):
+        dev = self._by_id(ident)
+        if token is not self._token or dev is None:
+            return
+        if not formats:
+            self.status.emit("ffmpeg is not installed, so tracks cannot be ripped.", 6000)
+            return
+        self._ask = {"kind": "rip", "device": ident, "items": items, "dest": dest}
+        self._confirm.ask(f"Rip {plural(len(items), 'track')} to {dest}? The files go into Artist and Album folders. "
+                          "The titles are looked up on MusicBrainz with the disc's ID, which needs a connection.",
+                          "Rip", formats, self._rip_format, [], "")
+        self._chrome()
+
+    def _ask_erase(self, dev):
+        self._ask = {"kind": "erase", "device": dev.id}
+        self._confirm.ask(f"Erase {dev.name}? Everything on the disc is lost and cannot be brought back.", "Erase")
+        self._chrome()
+
+    def _burn_image(self, dev):
+        path, _ = QFileDialog.getOpenFileName(self, f"Write a disc image to {dev.name}", str(self._dest),
+                                              "Disc images (*.iso *.img *.udf);;All files (*)")
+        if not path:
+            return
+        self._ask = {"kind": "image", "device": dev.id, "image": Path(path)}
+        self._confirm.ask(f"Write {Path(path).name} to the disc? A disc can be written only once, and stopping part way spoils it.",
+                          "Write")
+        self._chrome()
 
     # mount, eject, restore, menus
 
@@ -1286,6 +1339,17 @@ class DevicesWidget(QWidget):
                 menu.addAction("\U000f024b  Read the whole drive", lambda: self._set_root(dev, "."))
         if dev.kind == "cd" and not dev.details.get("media"):
             menu.addAction("\U000f0770  Close tray", lambda: self._mon.close_tray(dev.id))
+        if dev.kind == "cd" and dev.details.get("media"):
+            d = dev.details
+            busy = bool(self._busy_text(dev.id))
+            if d.get("audio") and dev.mounted:
+                data = self._list.data
+                menu.addAction("\U000f05ee  Rip the CD to files\u2026", lambda: self._rip(data.items if data else [])).setEnabled(
+                    not busy and bool(data and data.items))
+            if d.get("blank") and d.get("writable"):
+                menu.addAction("\U000f0238  Write a disc image\u2026", lambda: self._burn_image(dev)).setEnabled(not busy)
+            if d.get("rewritable"):
+                menu.addAction("\U000f01fe  Erase the disc\u2026", lambda: self._ask_erase(dev)).setEnabled(not busy)
         if dev.kind != "iphone" or dev.mounted:
             menu.addAction("\U000f01ea  Eject", lambda: self._eject(dev.id))
         menu.addSeparator()
@@ -1358,7 +1422,9 @@ class DevicesWidget(QWidget):
             if kind in ("copy_to", "restore") and dev is not None:
                 self._stale(dev.id)
                 self._mon.refresh()
-            elif kind == "copy_from":
+            elif kind == "erase":
+                self._mon.refresh()
+            elif kind in ("copy_from", "rip"):
                 ctx = self._ctx.pop(j["id"], None)
                 if ctx:
                     self.library_changed.emit(ctx["dest"])

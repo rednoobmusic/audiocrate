@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import cli_render
+import converter as cv
+import discs
 import idevice
 import ipod
 import phone_files
@@ -972,6 +974,7 @@ class DeviceMonitor(QObject):
                 self._cd_probing.add(key)
                 self._thread(self._probe_cd, key, node, wait=False)       # how much room the blank disc has
             free = (info or {}).get('free', 0)
+        facts = discs.media_facts(str(dr.get('Media') or '')) if media else {'kind': '', 'rewritable': False}
         name = (b.get('IdLabel') or ('Audio CD' if audio else 'Blank disc' if blank else 'Disc' if media else 'No disc'))
         return Device(
             id='cd:%s' % (dr.get('Id') or node), kind='cd', name=name, model=(vendor + ' ' + model).strip(),
@@ -979,7 +982,7 @@ class DeviceMonitor(QObject):
             fs=b.get('IdType') or ('cdda' if audio else ''), read_only=True, mounted=mount is not None and media,
             glyph=GLYPH['cd'],
             details={'cd': True, 'media': media, 'audio': audio, 'blank': blank, 'usable': usable, 'free_bytes': free, 'writable': bool(free), 'tracks': int(dr.get('OpticalNumAudioTracks') or 0),
-                     'locked': False, 'rockbox': False, 'serial': dr.get('Serial') or '', 'bus': dr.get('ConnectionBus') or '',
+                     'disc_kind': facts['kind'], 'rewritable': facts['rewritable'], 'locked': False, 'rockbox': False, 'serial': dr.get('Serial') or '', 'bus': dr.get('ConnectionBus') or '',
                      'can_power_off': False, 'drive': e.get('drive_path', ''), 'sibling': dr.get('SiblingId') or ''})
 
     def _device(self, e: dict, mounts: dict) -> Device:
@@ -1224,10 +1227,209 @@ class DeviceMonitor(QObject):
         lines += ['-commit', '-eject out']
         script = Path(tempfile.mkdtemp(prefix='burn-', dir=self.cache_dir if self.cache_dir.is_dir() else None)) / 'job.txt'
         script.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        tail = []
+
+        def progress(line):
+            m = _PERCENT.search(line) if line.startswith('Writing') else None
+            if m:
+                job.done_files, job.sub = 0, min(float(m.group(1)) / 100.0, 1.0) * job.total_files
+                job.text = "Writing to the disc, %d%%" % float(m.group(1))
+                job.publish()
         try:
-            job.proc = subprocess.Popen([exe, '-options_from_file', str(script)], stdin=subprocess.DEVNULL,
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+            rc, tail = self._disc_proc(job, [exe, '-options_from_file', str(script)], progress)
+        finally:
+            shutil.rmtree(script.parent, ignore_errors=True)
+        if rc != 0:
+            raise DeviceError("The disc could not be written. %s" % discs.failure_line(tail))
+        job.sub = 0.0
+        job.done_files = job.total_files
+        job.text = "Done. Close the tray to read the disc."
+
+    def _do_burn_audio(self, job, dev, paths):
+        """Write songs as the tracks of an audio CD. Each is made into CD quality sound in the cache first, the tracks
+        are checked against the 80 minutes a CD holds, and then cdrskin writes them in one pass."""
+        exe, ffmpeg = discs.cdrskin(), ffmpeg_path()
+        if not exe:
+            raise DeviceError(discs.NO_CDRSKIN)
+        if not ffmpeg:
+            raise DeviceError("ffmpeg is not installed, so songs cannot be turned into CD tracks.")
+        songs = [p for p in _expand(paths, AUDIO_EXTS) if p.suffix.lower() not in CHIP_EXTS]
+        if not songs:
+            raise DeviceError("There is no music in what was chosen that can go on an audio CD.")
+        if len(songs) > 99:
+            raise DeviceError("An audio CD holds 99 tracks at most, and %d songs were chosen." % len(songs))
+        lengths = [read_tags(p).get('duration') or 0 for p in songs]
+        if not all(lengths):
+            raise DeviceError("The length of %s is not known, so it cannot be checked against the disc." %
+                              songs[lengths.index(0)].name)
+        room = discs.audio_room(dev.details.get('free_bytes') or 0)
+        if sum(lengths) > room:
+            raise DeviceError("The songs play for %d minutes and the disc has room for %d." % (sum(lengths) // 60, room // 60))
+        work = Path(tempfile.mkdtemp(prefix='cd-', dir=self.cache_dir if self.cache_dir.is_dir() else None))
+        try:
+            if shutil.disk_usage(work).free < sum(lengths) * discs.PCM_PER_SECOND + (64 << 20):
+                raise DeviceError("There is not enough free space in the cache folder to prepare the tracks.")
+            n = len(songs)
+            job.total_files = 2 * n
+            wavs = []
+            for i, (src, secs) in enumerate(zip(songs, lengths)):
+                job.done_files, job.text = i, "Preparing track %d of %d" % (i + 1, n)
+                job.publish()
+                out = work / ('%02d.wav' % (i + 1))
+                args = [ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(src), '-vn', '-map', '0:a:0',
+                        '-ar', '44100', '-ac', '2', '-c:a', 'pcm_s16le', '-f', 'wav', '-progress', 'pipe:1', '-nostats', str(out)]
+                while not _FFMPEG.acquire(timeout=0.2):
+                    if job.cancel.is_set():
+                        raise _Cancelled
+                try:
+                    _run_ffmpeg(job, args, src, {'duration': secs})
+                finally:
+                    _FFMPEG.release()
+                wavs.append(str(out))
+            job.done_files, job.sub, job.text = n, 0.0, "Writing %d tracks to the disc" % n
+            job.publish(True)
+
+            def progress(line):
+                f = discs.written_fraction(line)
+                if f is not None:
+                    job.sub = f * n
+                    job.text = "Writing to the disc, %d%%" % (f * 100)
+                    job.publish()
+            rc, tail = self._disc_proc(job, discs.audio_cd_args(exe, dev.block, wavs), progress)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if rc != 0:
+            raise DeviceError("The disc could not be written. %s" % discs.failure_line(tail))
+        job.sub, job.done_files = 0.0, job.total_files
+        job.text = "Done. Close the tray to play the disc."
+
+    def burn_image(self, device_id: str, image: Path) -> str:
+        """Write a disc image (an ISO) to the blank disc as the whole disc."""
+        dev, image = self._find(device_id), Path(image)
+        if dev is None or dev.kind != 'cd':
+            return self._finished('burn', device_id, 'error', _GONE)
+        why = cd_write_problem(dev) if discs.xorriso() else discs.NO_IMAGE_TOOL
+        if not why and not image.is_file():
+            why = "That image file is not there any more."
+        if not why and image.stat().st_size > (dev.details.get('free_bytes') or 0):
+            why = "The image takes %.1f GB and the disc has room for %.1f GB." % (
+                image.stat().st_size / 1e9, (dev.details.get('free_bytes') or 0) / 1e9)
+        if not why and self._busy.get(device_id):
+            why = "Another job is running on this drive. Wait for it to finish first."
+        if why:
+            return self._finished('burn', device_id, 'error', why)
+        return self._start('burn', device_id, self._do_burn_image, dev, image)
+
+    def _do_burn_image(self, job, dev, image):
+        job.total_files, job.text = 1, "Writing %s to the disc" % image.name
+        job.publish(True)
+
+        def progress(line):
+            f = discs.written_fraction(line)
+            if f is not None:
+                job.sub = f
+                job.text = "Writing to the disc, %d%%" % (f * 100)
+                job.publish()
+        rc, tail = self._disc_proc(job, discs.image_args(discs.xorriso(), dev.block, str(image)), progress)
+        if rc != 0:
+            raise DeviceError("The disc could not be written. %s" % discs.failure_line(tail))
+        job.sub, job.done_files = 0.0, 1
+        job.text = "Done. Close the tray to read the disc."
+
+    def erase(self, device_id: str) -> str:
+        """Erase a rewritable disc (CD-RW, DVD-RW, DVD+RW) so that it can be written again."""
+        dev = self._find(device_id)
+        why = ("That drive is not connected any more." if dev is None or dev.kind != 'cd' else
+               "There is no disc in the drive." if not dev.details.get('media') else
+               "This disc cannot be erased. Only rewritable discs (RW) can." if not dev.details.get('rewritable') else
+               discs.NO_IMAGE_TOOL if not discs.xorriso() else
+               "Another job is running on this drive. Wait for it to finish first." if self._busy.get(device_id) else '')
+        if why:
+            return self._finished('erase', device_id, 'error', why)
+        return self._start('erase', device_id, self._do_erase, dev)
+
+    def _do_erase(self, job, dev):
+        job.total_files, job.text = 1, "Erasing the disc"
+        job.publish(True)
+        rc, tail = self._disc_proc(job, discs.erase_args(discs.xorriso(), dev.block), lambda line: None)
+        if rc != 0:
+            raise DeviceError("The disc could not be erased. %s" % discs.failure_line(tail))
+        job.done_files = 1
+        job.text = "The disc is erased."
+
+    def rip_formats(self) -> list[dict]:
+        """What an audio CD can be ripped to on this machine, as profiles: FLAC first. The first call tests each
+        encoder, which takes a moment, so ask from a worker thread."""
+        have = {f.id: f for f in cv.formats()}
+        return [{'id': i, 'label': have[i].label, 'detail': have[i].note}
+                for i in ('flac', 'mp3', 'opus', 'vorbis', 'aac', 'alac', 'wav') if i in have]
+
+    def rip(self, device_id: str, items: list[dict], dest_dir: Path, fmt: str) -> str:
+        """Rip tracks of an audio CD into dest_dir as Artist/Album/NN - Title in the chosen format. The album comes
+        from MusicBrainz by the disc id when libdiscid is there and the disc is known."""
+        dev = self._find(device_id)
+        if dev is None or dev.kind != 'cd' or not dev.details.get('audio') or not dev.mounted:
+            return self._finished('rip', device_id, 'error', "Open the audio CD first.")
+        if self._busy.get(device_id):
+            return self._finished('rip', device_id, 'error', "Another job is running on this drive. Wait for it to finish first.")
+        return self._start('rip', device_id, self._do_rip, dev, list(items), Path(dest_dir), fmt)
+
+    def _do_rip(self, job, dev, items, dest_dir, fmt_id):
+        fmt = cv.format_by_id(fmt_id)
+        if fmt is None:
+            raise DeviceError("That format is not available here.")
+        files = []
+        for i, it in enumerate(items):
+            p = Path(it['path'])
+            m = re.search(r'(\d+)', p.stem)
+            files.append((int(m.group(1)) if m else i + 1, p))
+        files.sort()
+        if not files:
+            raise DeviceError("Nothing was chosen.")
+        total = sum(p.stat().st_size for _, p in files)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(dest_dir).free < (total if fmt.lossless else total // 3):
+            raise DeviceError("There is not enough room in that folder: about %d MB needed." % ((total if fmt.lossless else total // 3) >> 20))
+        job.total_files, job.text = len(files), "Looking up the album"
+        job.publish(True)
+        info = discs.disc_info(dev.block)
+        album = discs.fetch_album(info) if info else None
+        count = (info or {}).get('tracks') or int(dev.details.get('tracks') or len(files))
+        opts = cv.Options(format=fmt.id, template='{albumartist}/{album}/{track} - {title}', folder=str(dest_dir),
+                          exists='skip', art=False)
+        jobs = [cv.ConvertJob(p, opts, discs.track_tags(n, count, album)) for n, p in files]
+
+        def update(j):
+            finished = sum(1 for x in jobs if x.finished)
+            job.done_files = finished
+            job.sub = (j.percent / 100.0) if not j.finished else 0.0
+            job.text = "Ripping track %d of %d" % (min(finished + 1, len(jobs)), len(jobs))
+            job.publish()
+        conv = cv.Converter(on_update=update, workers=1)       # one at a time: a drive reads one place at once
+        conv.start(jobs)
+        while not conv.wait(0.25):
+            if job.cancel.is_set():
+                conv.cancel()
+        if job.cancel.is_set():
+            raise _Cancelled
+        st = conv.stats
+        if st['failed'] and not st['done'] and not st['skipped']:
+            raise DeviceError(next((j.message for j in jobs if j.message and j.state == cv.FAILED), "The tracks could not be ripped."))
+        job.done_files, job.sub = job.total_files, 0.0
+        text = "Ripped %d track%s to %s." % (st['done'], '' if st['done'] == 1 else 's', dest_dir)
+        if st['skipped']:
+            text += " %d were already there." % st['skipped']
+        if st['failed']:
+            text += " %d could not be ripped." % st['failed']
+        job.text = text + ('' if album else " The album was not found, so the tracks are named by number.")
+
+    @staticmethod
+    def _disc_proc(job, argv, progress) -> tuple[int, list[str]]:
+        """Run a disc program, hand each line it prints to progress(line), and stop it when the job is cancelled.
+        Returns its exit code and its last few lines."""
+        tail = []
+        job.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+        try:
             buf = b''
             while True:
                 chunk = job.proc.stdout.read1(512)
@@ -1237,28 +1439,16 @@ class DeviceMonitor(QObject):
                 *done, buf = re.split(rb'[\r\n]', buf)
                 for raw in done:
                     line = raw.decode('utf-8', 'replace').strip()
-                    if not line:
-                        continue
-                    tail = (tail + [line])[-6:]
-                    m = _PERCENT.search(line) if line.startswith('Writing') else None
-                    if m:
-                        job.done_files, job.sub = 0, min(float(m.group(1)) / 100.0, 1.0) * job.total_files
-                        job.text = "Writing to the disc, %d%%" % float(m.group(1))
-                        job.publish()
+                    if line:
+                        tail = (tail + [line])[-6:]
+                        progress(line)
                 if job.cancel.is_set():
                     kill_group(job.proc)
                     raise _Cancelled
-            rc = job.proc.wait()
+            return job.proc.wait(), tail
         finally:
             if job.proc is not None and job.proc.poll() is None:
                 kill_group(job.proc)
-            shutil.rmtree(script.parent, ignore_errors=True)
-        if rc != 0:
-            why = next((l for l in reversed(tail) if 'FAILURE' in l or 'SORRY' in l or 'FATAL' in l), tail[-1] if tail else '')
-            raise DeviceError("The disc could not be written. %s" % why.split(':', 1)[-1].strip())
-        job.sub = 0.0
-        job.done_files = job.total_files
-        job.text = "Done. Close the tray to read the disc."
 
     def _do_close_tray(self, job, e):
         job.text = "Closing the tray"
@@ -1287,6 +1477,13 @@ class DeviceMonitor(QObject):
 
     def profiles(self, device_id: str) -> list[dict]:
         dev = self._find(device_id)
+        if dev is not None and dev.kind == 'cd':
+            if not (dev.details.get('blank') and discs.cdrskin() and dev.details.get('disc_kind') == 'cd'):
+                return []
+            return [{'id': 'data_cd', 'label': 'Data disc', 'detail': 'Writes the files in a Music folder. Plays in computers, '
+                     'car stereos and players that read MP3 and FLAC discs.'},
+                    {'id': 'audio_cd', 'label': 'Audio CD', 'detail': 'Writes the songs as CD tracks, 80 minutes at most. '
+                     'Plays in any CD player. Songs are turned into CD quality first.'}]
         return profiles_for(self._target(dev)[0]) if dev is not None and dev.kind != 'iphone' else []
 
     def backups(self, device_id: str) -> list[dict]:
@@ -1332,6 +1529,12 @@ class DeviceMonitor(QObject):
             if self._busy.get(device_id):
                 return self._finished('copy_to', device_id, 'error',
                                       "Another job is running on this drive. Wait for it to finish first.")
+            if profile == 'audio_cd':
+                if not discs.cdrskin():
+                    return self._finished('copy_to', device_id, 'error', discs.NO_CDRSKIN)
+                if dev.details.get('disc_kind') != 'cd':
+                    return self._finished('copy_to', device_id, 'error', "An audio CD needs a blank CD. This disc is a DVD.")
+                return self._start('burn', device_id, self._do_burn_audio, dev, [Path(p) for p in paths])
             return self._start('burn', device_id, self._do_burn, dev, [Path(p) for p in paths])
         if dev is None or not dev.mounted:
             return self._finished('copy_to', device_id, 'error', "Mount the device first.")

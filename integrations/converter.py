@@ -1554,6 +1554,20 @@ def tag_plan(pr: dict | None) -> tuple[dict, tuple]:
     return ({'lyrics': text[:100000]} if text else {}), tuple(drop + keys)
 
 
+def given_tags(tags: dict) -> dict:
+    """A ConvertJob's own tags as the names and strings ffmpeg writes."""
+    out = {k: str(tags[k]) for k in ('title', 'artist', 'album', 'genre') if tags.get(k)}
+    if tags.get('albumartist'):
+        out['album_artist'] = str(tags['albumartist'])
+    if tags.get('track'):
+        out['track'] = '%d/%d' % (tags['track'], tags['tracks']) if tags.get('tracks') else str(tags['track'])
+    if tags.get('disc'):
+        out['disc'] = '%d/%d' % (tags['disc'], tags['discs']) if tags.get('discs') else str(tags['disc'])
+    if tags.get('year'):
+        out['date'] = str(tags['year'])
+    return out
+
+
 def fix_id3(path: Path):
     """ffmpeg writes a comment and lyrics into ID3 as plain TXXX frames, which players do not show. Make them
     COMM and USLT frames."""
@@ -1658,11 +1672,12 @@ class ConvertJob:
     """One source file and what happens to it. The converter fills in the rest while it runs."""
     _ids = 0
 
-    def __init__(self, src, opts: Options):
+    def __init__(self, src, opts: Options, tags: dict | None = None):
         ConvertJob._ids += 1
         self.id = ConvertJob._ids
         self.src = Path(src)
         self.opts = opts
+        self.tags = tags or {}          # tags the source does not have (a track of a CD), which win over its own
         self.state, self.message, self.detail = WAITING, '', ''
         self.percent = 0
         self.dest: Path | None = None
@@ -1937,7 +1952,7 @@ class Converter:
                 raise ConvertError("This file could not be read. It may be damaged.")
             if not pr['has_audio']:
                 raise ConvertError("This file has no sound to convert.")
-            tags = merge_probe_tags(read_tags(src), pr, src)
+            tags = {**merge_probe_tags(read_tags(src), pr, src), **job.tags}
         named = src.with_name('%s - %02d %s%s' % (src.stem, song, tags['title'], src.suffix)) if many else None
         job.dest = dest = self._plan(job, tags, fmt, named)
         self._writable(dest.parent)
@@ -2009,7 +2024,7 @@ class Converter:
             if gain is None:
                 note = 'This file has no ReplayGain tags, so its volume was not changed.'
         wanted, drop = tag_plan(pr)
-        meta = {**wanted, **meta}
+        meta = {**wanted, **meta, **given_tags(job.tags)}
         several = tags.get('artist_values') or []
         if len(several) > 1:        # ffmpeg keeps the first of several values, or joins them with a bare ";"
             meta['artist'] = '; '.join(several)
